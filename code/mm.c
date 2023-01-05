@@ -103,35 +103,35 @@ static const word_t size_mask = ~(word_t)0xF;
 
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
-    /** @brief Header contains size + allocation flag */
-    word_t header;
+  /** @brief Header contains size + allocation flag */
+  word_t header;
 
-    /**
-     * @brief A pointer to the block payload.
-     *
-     * TODO: feel free to delete this comment once you've read it carefully.
-     * We don't know what the size of the payload will be, so we will declare
-     * it as a zero-length array, which is a GCC compiler extension. This will
-     * allow us to obtain a pointer to the start of the payload.
-     *
-     * WARNING: A zero-length array must be the last element in a struct, so
-     * there should not be any struct fields after it. For this lab, we will
-     * allow you to include a zero-length array in a union, as long as the
-     * union is the last field in its containing struct. However, this is
-     * compiler-specific behavior and should be avoided in general.
-     *
-     * WARNING: DO NOT cast this pointer to/from other types! Instead, you
-     * should use a union to alias this zero-length array with another struct,
-     * in order to store additional types of data in the payload memory.
-     */
-    char payload[0];
+  /**
+   * @brief A pointer to the block payload.
+   *
+   * TODO: feel free to delete this comment once you've read it carefully.
+   * We don't know what the size of the payload will be, so we will declare
+   * it as a zero-length array, which is a GCC compiler extension. This will
+   * allow us to obtain a pointer to the start of the payload.
+   *
+   * WARNING: A zero-length array must be the last element in a struct, so
+   * there should not be any struct fields after it. For this lab, we will
+   * allow you to include a zero-length array in a union, as long as the
+   * union is the last field in its containing struct. However, this is
+   * compiler-specific behavior and should be avoided in general.
+   *
+   * WARNING: DO NOT cast this pointer to/from other types! Instead, you
+   * should use a union to alias this zero-length array with another struct,
+   * in order to store additional types of data in the payload memory.
+   */
+  char payload[0];
 
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Why can't we declare the block footer here as part of the struct?
-     * Why do we even have footers -- will the code work fine without them?
-     * which functions actually use the data contained in footers?
-     */
+  /*
+   * TODO: delete or replace this comment once you've thought about it.
+   * Why can't we declare the block footer here as part of the struct?
+   * Why do we even have footers -- will the code work fine without them?
+   * which functions actually use the data contained in footers?
+   */
 } block_t;
 
 /* Global variables */
@@ -165,9 +165,7 @@ static block_t *heap_start = NULL;
  * @param[in] y
  * @return `x` if `x > y`, and `y` otherwise.
  */
-static size_t max(size_t x, size_t y) {
-    return (x > y) ? x : y;
-}
+static size_t max(size_t x, size_t y) { return (x > y) ? x : y; }
 
 /**
  * @brief Rounds `size` up to next multiple of n
@@ -176,7 +174,7 @@ static size_t max(size_t x, size_t y) {
  * @return The size after rounding up
  */
 static size_t round_up(size_t size, size_t n) {
-    return n * ((size + (n - 1)) / n);
+  return n * ((size + (n - 1)) / n);
 }
 
 /**
@@ -192,11 +190,11 @@ static size_t round_up(size_t size, size_t n) {
  * @return The packed value
  */
 static word_t pack(size_t size, bool alloc) {
-    word_t word = size;
-    if (alloc) {
-        word |= alloc_mask;
-    }
-    return word;
+  word_t word = size;
+  if (alloc) {
+    word |= alloc_mask;
+  }
+  return word;
 }
 
 /**
@@ -208,18 +206,14 @@ static word_t pack(size_t size, bool alloc) {
  * @param[in] word
  * @return The size of the block represented by the word
  */
-static size_t extract_size(word_t word) {
-    return (word & size_mask);
-}
+static size_t extract_size(word_t word) { return (word & size_mask); }
 
 /**
  * @brief Extracts the size of a block from its header.
  * @param[in] block
  * @return The size of the block
  */
-static size_t get_size(block_t *block) {
-    return extract_size(block->header);
-}
+static size_t get_size(block_t *block) { return extract_size(block->header); }
 
 /**
  * @brief Given a payload pointer, returns a pointer to the corresponding
@@ -228,7 +222,7 @@ static size_t get_size(block_t *block) {
  * @return The corresponding block
  */
 static block_t *payload_to_header(void *bp) {
-    return (block_t *)((char *)bp - offsetof(block_t, payload));
+  return (block_t *)((char *)bp - offsetof(block_t, payload));
 }
 
 /**
@@ -238,7 +232,7 @@ static block_t *payload_to_header(void *bp) {
  * @return A pointer to the block's payload
  */
 static void *header_to_payload(block_t *block) {
-    return (void *)(block->payload);
+  return (void *)(block->payload);
 }
 
 /**
@@ -248,7 +242,7 @@ static void *header_to_payload(block_t *block) {
  * @return A pointer to the block's footer
  */
 static word_t *header_to_footer(block_t *block) {
-    return (word_t *)(block->payload + get_size(block) - dsize);
+  return (word_t *)(block->payload + get_size(block) - dsize);
 }
 
 /**
@@ -258,8 +252,8 @@ static word_t *header_to_footer(block_t *block) {
  * @return A pointer to the start of the block
  */
 static block_t *footer_to_header(word_t *footer) {
-    size_t size = extract_size(*footer);
-    return (block_t *)((char *)footer + wsize - size);
+  size_t size = extract_size(*footer);
+  return (block_t *)((char *)footer + wsize - size);
 }
 
 /**
@@ -272,8 +266,8 @@ static block_t *footer_to_header(word_t *footer) {
  * @return The size of the block's payload
  */
 static size_t get_payload_size(block_t *block) {
-    size_t asize = get_size(block);
-    return asize - dsize;
+  size_t asize = get_size(block);
+  return asize - dsize;
 }
 
 /**
@@ -284,18 +278,14 @@ static size_t get_payload_size(block_t *block) {
  * @param[in] word
  * @return The allocation status correpsonding to the word
  */
-static bool extract_alloc(word_t word) {
-    return (bool)(word & alloc_mask);
-}
+static bool extract_alloc(word_t word) { return (bool)(word & alloc_mask); }
 
 /**
  * @brief Returns the allocation status of a block, based on its header.
  * @param[in] block
  * @return The allocation status of the block
  */
-static bool get_alloc(block_t *block) {
-    return extract_alloc(block->header);
-}
+static bool get_alloc(block_t *block) { return extract_alloc(block->header); }
 
 /**
  * @brief Writes an epilogue header at the given address.
@@ -305,9 +295,9 @@ static bool get_alloc(block_t *block) {
  * @param[out] block The location to write the epilogue header
  */
 static void write_epilogue(block_t *block) {
-    dbg_requires(block != NULL);
-    dbg_requires((char *)block == mem_heap_hi() - 7);
-    block->header = pack(0, true);
+  dbg_requires(block != NULL);
+  dbg_requires((char *)block == mem_heap_hi() - 7);
+  block->header = pack(0, true);
 }
 
 /**
@@ -323,11 +313,11 @@ static void write_epilogue(block_t *block) {
  * @param[in] alloc The allocation status of the new block
  */
 static void write_block(block_t *block, size_t size, bool alloc) {
-    dbg_requires(block != NULL);
-    dbg_requires(size > 0);
-    block->header = pack(size, alloc);
-    word_t *footerp = header_to_footer(block);
-    *footerp = pack(size, alloc);
+  dbg_requires(block != NULL);
+  dbg_requires(size > 0);
+  block->header = pack(size, alloc);
+  word_t *footerp = header_to_footer(block);
+  *footerp = pack(size, alloc);
 }
 
 /**
@@ -341,9 +331,9 @@ static void write_block(block_t *block, size_t size, bool alloc) {
  * @pre The block is not the epilogue
  */
 static block_t *find_next(block_t *block) {
-    dbg_requires(block != NULL);
-    dbg_requires(get_size(block) != 0);
-    return (block_t *)((char *)block + get_size(block));
+  dbg_requires(block != NULL);
+  dbg_requires(get_size(block) != 0);
+  return (block_t *)((char *)block + get_size(block));
 }
 
 /**
@@ -352,8 +342,8 @@ static block_t *find_next(block_t *block) {
  * @return The location of the previous block's footer
  */
 static word_t *find_prev_footer(block_t *block) {
-    // Compute previous footer position as one word before the header
-    return &(block->header) - 1;
+  // Compute previous footer position as one word before the header
+  return &(block->header) - 1;
 }
 
 /**
@@ -370,10 +360,10 @@ static word_t *find_prev_footer(block_t *block) {
  * @pre The block is not the first block in the heap
  */
 static block_t *find_prev(block_t *block) {
-    dbg_requires(block != NULL);
-    dbg_requires(get_size(block) != 0);
-    word_t *footerp = find_prev_footer(block);
-    return footer_to_header(footerp);
+  dbg_requires(block != NULL);
+  dbg_requires(get_size(block) != 0);
+  word_t *footerp = find_prev_footer(block);
+  return footer_to_header(footerp);
 }
 
 /*
@@ -396,15 +386,15 @@ static block_t *find_prev(block_t *block) {
  * @return
  */
 static block_t *coalesce_block(block_t *block) {
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about how coalesce_block should be implemented, it would be helpful
-     * to review the lecture Dynamic Memory Allocation: Advanced. Consider the
-     * four cases that you reviewed when writing your traces, how will you
-     * account for all of these?
-     */
+  /*
+   * TODO: delete or replace this comment once you've thought about it.
+   * Think about how coalesce_block should be implemented, it would be helpful
+   * to review the lecture Dynamic Memory Allocation: Advanced. Consider the
+   * four cases that you reviewed when writing your traces, how will you
+   * account for all of these?
+   */
 
-    return block;
+  return block;
 }
 
 /**
@@ -419,33 +409,33 @@ static block_t *coalesce_block(block_t *block) {
  * @return
  */
 static block_t *extend_heap(size_t size) {
-    void *bp;
+  void *bp;
 
-    // Allocate an even number of words to maintain alignment
-    size = round_up(size, dsize);
-    if ((bp = mem_sbrk(size)) == (void *)-1) {
-        return NULL;
-    }
+  // Allocate an even number of words to maintain alignment
+  size = round_up(size, dsize);
+  if ((bp = mem_sbrk(size)) == (void *)-1) {
+    return NULL;
+  }
 
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about what bp represents. Why do we write the new block
-     * starting one word BEFORE bp, but with the same size that we
-     * originally requested?
-     */
+  /*
+   * TODO: delete or replace this comment once you've thought about it.
+   * Think about what bp represents. Why do we write the new block
+   * starting one word BEFORE bp, but with the same size that we
+   * originally requested?
+   */
 
-    // Initialize free block header/footer
-    block_t *block = payload_to_header(bp);
-    write_block(block, size, false);
+  // Initialize free block header/footer
+  block_t *block = payload_to_header(bp);
+  write_block(block, size, false);
 
-    // Create new epilogue header
-    block_t *block_next = find_next(block);
-    write_epilogue(block_next);
+  // Create new epilogue header
+  block_t *block_next = find_next(block);
+  write_epilogue(block_next);
 
-    // Coalesce in case the previous block was free
-    block = coalesce_block(block);
+  // Coalesce in case the previous block was free
+  block = coalesce_block(block);
 
-    return block;
+  return block;
 }
 
 /**
@@ -460,20 +450,20 @@ static block_t *extend_heap(size_t size) {
  * @param[in] asize
  */
 static void split_block(block_t *block, size_t asize) {
-    dbg_requires(get_alloc(block));
-    /* TODO: Can you write a precondition about the value of asize? */
+  dbg_requires(get_alloc(block));
+  /* TODO: Can you write a precondition about the value of asize? */
 
-    size_t block_size = get_size(block);
+  size_t block_size = get_size(block);
 
-    if ((block_size - asize) >= min_block_size) {
-        block_t *block_next;
-        write_block(block, asize, true);
+  if ((block_size - asize) >= min_block_size) {
+    block_t *block_next;
+    write_block(block, asize, true);
 
-        block_next = find_next(block);
-        write_block(block_next, block_size - asize, false);
-    }
+    block_next = find_next(block);
+    write_block(block_next, block_size - asize, false);
+  }
 
-    dbg_ensures(get_alloc(block));
+  dbg_ensures(get_alloc(block));
 }
 
 /**
@@ -488,15 +478,15 @@ static void split_block(block_t *block, size_t asize) {
  * @return
  */
 static block_t *find_fit(size_t asize) {
-    block_t *block;
+  block_t *block;
 
-    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+  for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
 
-        if (!(get_alloc(block)) && (asize <= get_size(block))) {
-            return block;
-        }
+    if (!(get_alloc(block)) && (asize <= get_size(block))) {
+      return block;
     }
-    return NULL; // no fit found
+  }
+  return NULL; // no fit found
 }
 
 /**
@@ -511,20 +501,20 @@ static block_t *find_fit(size_t asize) {
  * @return
  */
 bool mm_checkheap(int line) {
-    /*
-     * TODO: Delete this comment!
-     *
-     * You will need to write the heap checker yourself.
-     * Please keep modularity in mind when you're writing the heap checker!
-     *
-     * As a filler: one guacamole is equal to 6.02214086 x 10**23 guacas.
-     * One might even call it...  the avocado's number.
-     *
-     * Internal use only: If you mix guacamole on your bibimbap,
-     * do you eat it with a pair of chopsticks, or with a spoon?
-     */
+  /*
+   * TODO: Delete this comment!
+   *
+   * You will need to write the heap checker yourself.
+   * Please keep modularity in mind when you're writing the heap checker!
+   *
+   * As a filler: one guacamole is equal to 6.02214086 x 10**23 guacas.
+   * One might even call it...  the avocado's number.
+   *
+   * Internal use only: If you mix guacamole on your bibimbap,
+   * do you eat it with a pair of chopsticks, or with a spoon?
+   */
 
-    return true;
+  return true;
 }
 
 /**
@@ -538,31 +528,31 @@ bool mm_checkheap(int line) {
  * @return
  */
 bool mm_init(void) {
-    // Create the initial empty heap
-    word_t *start = (word_t *)(mem_sbrk(2 * wsize));
+  // Create the initial empty heap
+  word_t *start = (word_t *)(mem_sbrk(2 * wsize));
 
-    if (start == (void *)-1) {
-        return false;
-    }
+  if (start == (void *)-1) {
+    return false;
+  }
 
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about why we need a heap prologue and epilogue. Why do
-     * they correspond to a block footer and header respectively?
-     */
+  /*
+   * TODO: delete or replace this comment once you've thought about it.
+   * Think about why we need a heap prologue and epilogue. Why do
+   * they correspond to a block footer and header respectively?
+   */
 
-    start[0] = pack(0, true); // Heap prologue (block footer)
-    start[1] = pack(0, true); // Heap epilogue (block header)
+  start[0] = pack(0, true); // Heap prologue (block footer)
+  start[1] = pack(0, true); // Heap epilogue (block header)
 
-    // Heap starts with first "block header", currently the epilogue
-    heap_start = (block_t *)&(start[1]);
+  // Heap starts with first "block header", currently the epilogue
+  heap_start = (block_t *)&(start[1]);
 
-    // Extend the empty heap with a free block of chunksize bytes
-    if (extend_heap(chunksize) == NULL) {
-        return false;
-    }
+  // Extend the empty heap with a free block of chunksize bytes
+  if (extend_heap(chunksize) == NULL) {
+    return false;
+  }
 
-    return true;
+  return true;
 }
 
 /**
@@ -577,55 +567,55 @@ bool mm_init(void) {
  * @return
  */
 void *malloc(size_t size) {
-    dbg_requires(mm_checkheap(__LINE__));
+  dbg_requires(mm_checkheap(__LINE__));
 
-    size_t asize;      // Adjusted block size
-    size_t extendsize; // Amount to extend heap if no fit is found
-    block_t *block;
-    void *bp = NULL;
+  size_t asize;      // Adjusted block size
+  size_t extendsize; // Amount to extend heap if no fit is found
+  block_t *block;
+  void *bp = NULL;
 
-    // Initialize heap if it isn't initialized
-    if (heap_start == NULL) {
-        mm_init();
-    }
+  // Initialize heap if it isn't initialized
+  if (heap_start == NULL) {
+    mm_init();
+  }
 
-    // Ignore spurious request
-    if (size == 0) {
-        dbg_ensures(mm_checkheap(__LINE__));
-        return bp;
-    }
-
-    // Adjust block size to include overhead and to meet alignment requirements
-    asize = round_up(size + dsize, dsize);
-
-    // Search the free list for a fit
-    block = find_fit(asize);
-
-    // If no fit is found, request more memory, and then and place the block
-    if (block == NULL) {
-        // Always request at least chunksize
-        extendsize = max(asize, chunksize);
-        block = extend_heap(extendsize);
-        // extend_heap returns an error
-        if (block == NULL) {
-            return bp;
-        }
-    }
-
-    // The block should be marked as free
-    dbg_assert(!get_alloc(block));
-
-    // Mark block as allocated
-    size_t block_size = get_size(block);
-    write_block(block, block_size, true);
-
-    // Try to split the block if too large
-    split_block(block, asize);
-
-    bp = header_to_payload(block);
-
+  // Ignore spurious request
+  if (size == 0) {
     dbg_ensures(mm_checkheap(__LINE__));
     return bp;
+  }
+
+  // Adjust block size to include overhead and to meet alignment requirements
+  asize = round_up(size + dsize, dsize);
+
+  // Search the free list for a fit
+  block = find_fit(asize);
+
+  // If no fit is found, request more memory, and then and place the block
+  if (block == NULL) {
+    // Always request at least chunksize
+    extendsize = max(asize, chunksize);
+    block = extend_heap(extendsize);
+    // extend_heap returns an error
+    if (block == NULL) {
+      return bp;
+    }
+  }
+
+  // The block should be marked as free
+  dbg_assert(!get_alloc(block));
+
+  // Mark block as allocated
+  size_t block_size = get_size(block);
+  write_block(block, block_size, true);
+
+  // Try to split the block if too large
+  split_block(block, asize);
+
+  bp = header_to_payload(block);
+
+  dbg_ensures(mm_checkheap(__LINE__));
+  return bp;
 }
 
 /**
@@ -639,25 +629,25 @@ void *malloc(size_t size) {
  * @param[in] bp
  */
 void free(void *bp) {
-    dbg_requires(mm_checkheap(__LINE__));
+  dbg_requires(mm_checkheap(__LINE__));
 
-    if (bp == NULL) {
-        return;
-    }
+  if (bp == NULL) {
+    return;
+  }
 
-    block_t *block = payload_to_header(bp);
-    size_t size = get_size(block);
+  block_t *block = payload_to_header(bp);
+  size_t size = get_size(block);
 
-    // The block should be marked as allocated
-    dbg_assert(get_alloc(block));
+  // The block should be marked as allocated
+  dbg_assert(get_alloc(block));
 
-    // Mark the block as free
-    write_block(block, size, false);
+  // Mark the block as free
+  write_block(block, size, false);
 
-    // Try to coalesce the block with its neighbors
-    block = coalesce_block(block);
+  // Try to coalesce the block with its neighbors
+  block = coalesce_block(block);
 
-    dbg_ensures(mm_checkheap(__LINE__));
+  dbg_ensures(mm_checkheap(__LINE__));
 }
 
 /**
@@ -673,40 +663,40 @@ void free(void *bp) {
  * @return
  */
 void *realloc(void *ptr, size_t size) {
-    block_t *block = payload_to_header(ptr);
-    size_t copysize;
-    void *newptr;
+  block_t *block = payload_to_header(ptr);
+  size_t copysize;
+  void *newptr;
 
-    // If size == 0, then free block and return NULL
-    if (size == 0) {
-        free(ptr);
-        return NULL;
-    }
-
-    // If ptr is NULL, then equivalent to malloc
-    if (ptr == NULL) {
-        return malloc(size);
-    }
-
-    // Otherwise, proceed with reallocation
-    newptr = malloc(size);
-
-    // If malloc fails, the original block is left untouched
-    if (newptr == NULL) {
-        return NULL;
-    }
-
-    // Copy the old data
-    copysize = get_payload_size(block); // gets size of old payload
-    if (size < copysize) {
-        copysize = size;
-    }
-    memcpy(newptr, ptr, copysize);
-
-    // Free the old block
+  // If size == 0, then free block and return NULL
+  if (size == 0) {
     free(ptr);
+    return NULL;
+  }
 
-    return newptr;
+  // If ptr is NULL, then equivalent to malloc
+  if (ptr == NULL) {
+    return malloc(size);
+  }
+
+  // Otherwise, proceed with reallocation
+  newptr = malloc(size);
+
+  // If malloc fails, the original block is left untouched
+  if (newptr == NULL) {
+    return NULL;
+  }
+
+  // Copy the old data
+  copysize = get_payload_size(block); // gets size of old payload
+  if (size < copysize) {
+    copysize = size;
+  }
+  memcpy(newptr, ptr, copysize);
+
+  // Free the old block
+  free(ptr);
+
+  return newptr;
 }
 
 /**
@@ -722,23 +712,23 @@ void *realloc(void *ptr, size_t size) {
  * @return
  */
 void *calloc(size_t elements, size_t size) {
-    void *bp;
-    size_t asize = elements * size;
+  void *bp;
+  size_t asize = elements * size;
 
-    if (asize / elements != size) {
-        // Multiplication overflowed
-        return NULL;
-    }
+  if (asize / elements != size) {
+    // Multiplication overflowed
+    return NULL;
+  }
 
-    bp = malloc(asize);
-    if (bp == NULL) {
-        return NULL;
-    }
+  bp = malloc(asize);
+  if (bp == NULL) {
+    return NULL;
+  }
 
-    // Initialize all bits to 0
-    memset(bp, 0, asize);
+  // Initialize all bits to 0
+  memset(bp, 0, asize);
 
-    return bp;
+  return bp;
 }
 
 /*
