@@ -1,5 +1,2 @@
 tput*
-*.o
-mdriver*
-result_mm.c
 .vscode\*

@@ -188,9 +188,7 @@ void mem_reset_brk()
 void *mem_sbrk(intptr_t incr)
 {
     unsigned char *old_brk = mem_brk;
-                fprintf(
-            stderr,
-            "%ld\n", incr);
+
     bool ok = true;
     if (incr < 0)
     {

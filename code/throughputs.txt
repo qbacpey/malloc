@@ -6,3 +6,4 @@ Intel(R)Xeon(R)CPUE5-2687Wv3@3.10GHz:checkpoint:12313
 Intel(R)Xeon(R)CPUE5-2690v2@3.00GHz:checkpoint:13632
 Intel(R)Xeon(R)CPUE5520@2.27GHz:regular:8009
 Intel(R)Xeon(R)CPUE5520@2.27GHz:checkpoint:12112
+AMDRyzen74800UwithRadeonGraphics:regular:12413
