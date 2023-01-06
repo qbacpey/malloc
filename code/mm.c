@@ -88,8 +88,11 @@ static const size_t wsize = sizeof(word_t);
 /** @brief Double word size (bytes) */
 static const size_t dsize = 2 * wsize;
 
-/** @brief Minimum block size (bytes) */
-static const size_t min_block_size = 2 * dsize;
+/** @brief Minimum block size (bytes) 
+ * 
+ * header + prev pointer + next pointer + footer
+ */
+static const size_t min_block_size = 4 * dsize;
 
 /**
  * sbrk一次移动的最小长度，现在是4KB
@@ -112,6 +115,15 @@ static const word_t size_mask = ~(word_t)0xF;
 typedef struct block {
   /** @brief Header contains size + allocation flag */
   word_t header;
+
+  /** @brief 指向free list中前一个block的指针 */
+  block_t * prev;
+
+  /** @brief 指向free list中后一个block的指针 */
+  block_t * next;
+
+  /** @brief Same as header */
+  word_t footer;
 
   /**
    * @brief A pointer to the block payload.
@@ -155,6 +167,12 @@ typedef struct block {
  * 
  * 实际是prologue的尾巴 */
 static block_t *heap_start = NULL;
+
+/**
+ * @brief free list头节点
+ * 不会是epilogue block
+ */
+static block_t *root = NULL;
 
 /*
  *****************************************************************************
@@ -319,12 +337,13 @@ static void write_epilogue(block_t *block) {
 
 /**
  * @brief Writes a block starting at the given address.
+ * @pre size >= min_block_size
  *
  * This function writes both a header and footer, where the location of the
  * footer is computed in relation to the header.
  *
  * TODO: Are there any preconditions or postconditions?
- *
+ * 
  * @param[out] block The location to begin writing the block header
  * @param[in] size The size of the new block
  * @param[in] alloc The allocation status of the new block
@@ -392,8 +411,7 @@ static block_t *find_prev(block_t *block) {
 /******** The remaining content below are helper and debug routines ********/
 
 /**
- * @brief free block时会被调用，将与BLOCK邻接的free block与之合并
- * @pre get_alloc(block) == false，footer无需设置
+ * @brief free block时会被调用，检查并确定是否需要将与BLOCK邻接的free block与之合并
  * 
  * @note 需要分别处理四种不同的情况，处理后需根据新Block大小设置footer
  * 
@@ -405,6 +423,7 @@ static block_t *find_prev(block_t *block) {
  * 
  * @param[in] block 等待合并的Block
  * @return 合并之后的Block的地址，可能和参数一致
+ * @pre get_alloc(block) == false，footer无需设置
  */
 static block_t *coalesce_block(block_t *block) {
   /*
@@ -420,7 +439,16 @@ static block_t *coalesce_block(block_t *block) {
 
 /**
  * @brief 执行系统调用，将堆向上移动SIZE byte
+ * 
  * @note SIZE会被向上取整为双字的倍数
+ * 
+ * @par 需要在堆末尾插入新Block时，需要这样做：
+ * 1.next blcok的next为NULL，代表它是epilogue block，跳出循环；
+ * 2.调用sbrk申请SIZE，注意实际移动的距离；
+ * 3.如果位于堆最后的block是不是处于free状态，将其抽出free list、修改其大小
+ *   并压入free list头部。注意为epilogue block留出空间；
+ * 4.如果不是，将新申请的空间作为新Block压入free list顶部。同时确保
+ *   epilogue block内容不变并修改其prev的next为新地址；
  *
  * @param[in] size 堆被向上移动的大小
  * @return 移动brk之后，堆最后一个Block的地址（不是payload）
@@ -458,11 +486,13 @@ static block_t *extend_heap(size_t size) {
 }
 
 /**
- * @brief 将BLOCK拆分为大小分别ASIZE和block size - ASIZE的两个block
- * @pre ASIZE < get_size(BLOCK)
+ * @brief 检查并确定是否需要将BLOCK拆分为大小分别ASIZE和block size - ASIZE的两个block
+ * 
+ * @note 如果分割出来的大小小于min_block_size，那就不必分了
  *
  * @param[in] block 待拆分的block
  * @param[in] asize BLOCK的目标新大小
+ * @pre ASIZE < get_size(BLOCK)
  */
 static void split_block(block_t *block, size_t asize) {
   dbg_requires(get_alloc(block));
@@ -482,15 +512,12 @@ static void split_block(block_t *block, size_t asize) {
 }
 
 /**
- * @brief 在
+ * @brief 在堆中寻找一个大小大于等于ASIZE的块
+ * 
+ * @par first fit
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] asize
- * @return
+ * @param[in] asize 目标大小
+ * @return 块的地址，如果没有找到则是NULL
  */
 static block_t *find_fit(size_t asize) {
   block_t *block;
@@ -505,15 +532,44 @@ static block_t *find_fit(size_t asize) {
 }
 
 /**
- * @brief
+ * @brief 检查堆的不变性是否始终被满足
+ * 
+ * @par Heap check：
+ * - epilogue & prologue blocks 格式检查（见下）；
+ * - Coalesce检查：堆中不可以有任何两个连续的Free Block存在；
+ * 
+ * @par List check：
+ * - 前后两个Block需具有正确的next/previous指向；
+ * - 所有指针都位于mem heap lo() & mem heap high()之间；
+ * - 遍历堆得到的Free block数目应该和遍历free list得到的数目一致；
+ * - segregated list相关（ @todo ）
+ * 
+ * @par Block check：
+ * - Block地址均对齐16Byte；
+ * - Block都在Heap的边界之内；
+ * - Free之后Block的allocate bit应该被合理设置；
+ * - 每个Block的Header和Footer：
+ *    - 大小是大于等于Block的最小值；
+ *    - prev和next是否具有一致性；
+ *    - allocate bit是否符合实际情况；
+ *    - Header和Footer是否相互匹配；
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
+ * @par free list方面，epilogue block需保持如下不变性：
+ * - next元素始终为NULL：可用于检测是否到达free list的末尾；
+ * - prev元素始终指向block_t：可将初次插入以及后续插入
+ *   平凡化为同一种情况，将其当作普通的block修改指针即可；
+ * - 由于堆初始情况下即包含有一个大小为chunksize的block，因此prev元素不可为NULL；
+ * 
+ * @par coalesce block方面，epilogue block和prologue blcok都需保持
+ * allocated bit为1，以便将边界coalesce情况化为平凡情况
+ * 
+ * @par free list需保持如下不变性：
+ * - 头部节点prev必然为NULL；
+ * - 尾部节点必须是epilogue block；
+ * 
  *
- * @param[in] line
- * @return
+ * @param[in] line 被调用时的行号
+ * @return 堆是否满足不变性
  */
 bool mm_checkheap(int line) {
   /*
@@ -533,12 +589,15 @@ bool mm_checkheap(int line) {
 }
 
 /**
- * @brief
- *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
+ * @brief 初始化堆
+ * 
+ * @par 初始状况下的堆长度为64Byte (4 DWord) + chunksize：
+ * - DWord1：prologue block的footer；
+ * - DWord2：epilogue block的header；
+ * - DWord3：epilogue block的prev；
+ * - DWord4：epilogue block的next；
+ * - chunksize：堆初始的空余空间，可被直接使用；
+ * 它们的“size”字段都为0，用于标识
  *
  * @return
  */
@@ -554,6 +613,8 @@ bool mm_init(void) {
    * TODO: delete or replace this comment once you've thought about it.
    * Think about why we need a heap prologue and epilogue. Why do
    * they correspond to a block footer and header respectively?
+   * 
+   * 主要的目的是用来标识堆的边界
    */
 
   start[0] = pack(0, true); // Heap prologue (block footer)
@@ -571,15 +632,17 @@ bool mm_init(void) {
 }
 
 /**
- * @brief
- *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] size
- * @return
+ * @brief 获取一个指定大小的Block，可能调用sbrk
+ * 
+ * @par 需执行的操作如下：
+ * 1.find_fit：遍历free list，寻找合适的free block；
+ *   1.找到了：将其移出free list；
+ *   2.没有找到：调用extend_heap拓展堆；
+ * 2.split_block：根据占用大小对其进行分割；
+ * 
+ * @param[in] size 目标payload的大小，不一定是倍数
+ * @return 合适payload的地址
+ * @post 返回地址需对齐Dword
  */
 void *malloc(size_t size) {
   dbg_requires(mm_checkheap(__LINE__));
@@ -634,14 +697,19 @@ void *malloc(size_t size) {
 }
 
 /**
- * @brief
- *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
+ * @brief 释放目标BP指向的block
+ * 
+ * @par 需执行的操作如下：
+ * 1.将指定Block从free list中移出；
+ * 2.将其状态标记为free；
+ * 3.Coalesce邻接Block；
+ * 4.将新free block插入free list头部；
  *
  * @param[in] bp
+ * @pre 鉴于payload的地址必对齐16位，似乎可以利用这一特性
+ * @post header & footer的allocated bit都被合理设置
+ * @post 位于free list的头部
+ * @post 堆中不可有连续的free block
  */
 void free(void *bp) {
   dbg_requires(mm_checkheap(__LINE__));
