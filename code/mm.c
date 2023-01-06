@@ -3,8 +3,14 @@
  * @brief A 64-bit struct-based implicit free list memory allocator
  *
  * 15-213: Introduction to Computer Systems
- *
- * TODO: insert your documentation here. :)
+ * 
+ * Explicit List实现：
+ * 
+ * Placement policy：first fit
+ * Splitting policy：不少于最小块的大小即可
+ * Coalescing policy：immediate coalesce
+ * Insertion policy：LIFO
+ * Eliminating Footers：none
  *
  *************************************************************************
  *
@@ -86,18 +92,19 @@ static const size_t dsize = 2 * wsize;
 static const size_t min_block_size = 2 * dsize;
 
 /**
- * TODO: explain what chunksize is
+ * sbrk一次移动的最小长度，现在是4KB
+ * 需要在利用率和吞吐量之间平衡
  * (Must be divisible by dsize)
  */
 static const size_t chunksize = (1 << 12);
 
 /**
- * TODO: explain what alloc_mask is
+ * Header以及Footer的低位，用于表示当前Block是否被分配
  */
 static const word_t alloc_mask = 0x1;
 
 /**
- * TODO: explain what size_mask is
+ * 用于计算Block大小的掩码，单位是Byte
  */
 static const word_t size_mask = ~(word_t)0xF;
 
@@ -109,20 +116,27 @@ typedef struct block {
   /**
    * @brief A pointer to the block payload.
    *
-   * TODO: feel free to delete this comment once you've read it carefully.
    * We don't know what the size of the payload will be, so we will declare
    * it as a zero-length array, which is a GCC compiler extension. This will
    * allow us to obtain a pointer to the start of the payload.
+   * 
+   * 可以通过block->payload获取payload的地址
    *
    * WARNING: A zero-length array must be the last element in a struct, so
    * there should not be any struct fields after it. For this lab, we will
    * allow you to include a zero-length array in a union, as long as the
    * union is the last field in its containing struct. However, this is
    * compiler-specific behavior and should be avoided in general.
+   * 
+   * 零长度数组字段必须是结构体的最后一个字段，但是可以将这个字段包在一个Union里边
+   * 只需确保Union也是结构体的最后一个字段即可
    *
    * WARNING: DO NOT cast this pointer to/from other types! Instead, you
    * should use a union to alias this zero-length array with another struct,
    * in order to store additional types of data in the payload memory.
+   * 
+   * 不要使用强制类型转换将此字段变为其他类型，最好使用一个Union将其包裹起来
+   * 不过Union中的其他成员可以是结构体，可以使用它们来保存一些其他的数据
    */
   char payload[0];
 
@@ -136,7 +150,10 @@ typedef struct block {
 
 /* Global variables */
 
-/** @brief Pointer to first block in the heap */
+/** 
+ * @brief Pointer to first block in the heap
+ * 
+ * 实际是prologue的尾巴 */
 static block_t *heap_start = NULL;
 
 /*
@@ -375,15 +392,19 @@ static block_t *find_prev(block_t *block) {
 /******** The remaining content below are helper and debug routines ********/
 
 /**
- * @brief
- *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] block
- * @return
+ * @brief free block时会被调用，将与BLOCK邻接的free block与之合并
+ * @pre get_alloc(block) == false，footer无需设置
+ * 
+ * @note 需要分别处理四种不同的情况，处理后需根据新Block大小设置footer
+ * 
+ * @par 四种不同的情况：
+ * - 两边都已分配：只需将free list的头节点改成block即可；
+ * - 左边或右边已释放：首先需要将该节点从free list中移除，随后将其与自身合并
+ *   为一个新的Block，最后再将该Block移入free list；
+ * - 两边都已释放：需要先将左右两个Block都从free list中移除，随后操作同上；
+ * 
+ * @param[in] block 等待合并的Block
+ * @return 合并之后的Block的地址，可能和参数一致
  */
 static block_t *coalesce_block(block_t *block) {
   /*
@@ -398,15 +419,11 @@ static block_t *coalesce_block(block_t *block) {
 }
 
 /**
- * @brief
+ * @brief 执行系统调用，将堆向上移动SIZE byte
+ * @note SIZE会被向上取整为双字的倍数
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] size
- * @return
+ * @param[in] size 堆被向上移动的大小
+ * @return 移动brk之后，堆最后一个Block的地址（不是payload）
  */
 static block_t *extend_heap(size_t size) {
   void *bp;
@@ -422,6 +439,8 @@ static block_t *extend_heap(size_t size) {
    * Think about what bp represents. Why do we write the new block
    * starting one word BEFORE bp, but with the same size that we
    * originally requested?
+   * 
+   * 原来的epilogue block的位置会被占掉，正好补偿了
    */
 
   // Initialize free block header/footer
@@ -439,15 +458,11 @@ static block_t *extend_heap(size_t size) {
 }
 
 /**
- * @brief
+ * @brief 将BLOCK拆分为大小分别ASIZE和block size - ASIZE的两个block
+ * @pre ASIZE < get_size(BLOCK)
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] block
- * @param[in] asize
+ * @param[in] block 待拆分的block
+ * @param[in] asize BLOCK的目标新大小
  */
 static void split_block(block_t *block, size_t asize) {
   dbg_requires(get_alloc(block));
@@ -467,7 +482,7 @@ static void split_block(block_t *block, size_t asize) {
 }
 
 /**
- * @brief
+ * @brief 在
  *
  * <What does this function do?>
  * <What are the function's arguments?>
