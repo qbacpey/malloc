@@ -172,7 +172,7 @@ static block_t *heap_start = NULL;
  * @brief free list头节点
  * 不会是epilogue block
  */
-static block_t *root = NULL;
+static block_t *free_list_root = NULL;
 
 /*
  *****************************************************************************
@@ -326,13 +326,17 @@ static bool get_alloc(block_t *block) { return extract_alloc(block->header); }
  * @brief Writes an epilogue header at the given address.
  *
  * The epilogue header has size 0, and is marked as allocated.
+ * next元素始终为NULL，prev元素始终指向free list中的前一个元素（block_t）
  *
  * @param[out] block The location to write the epilogue header
+ * @pre block == mem_heap_hi() - 7 - 8 - 8
  */
-static void write_epilogue(block_t *block) {
+static void write_epilogue(block_t *block, block_t *prev) {
   dbg_requires(block != NULL);
-  dbg_requires((char *)block == mem_heap_hi() - 7);
+  dbg_requires((char *)block == mem_heap_hi() - 7 - dsize - dsize);
   block->header = pack(0, true);
+  block->prev = prev;
+  block->next = NULL;
 }
 
 /**
@@ -402,6 +406,21 @@ static block_t *find_prev(block_t *block) {
   return footer_to_header(footerp);
 }
 
+/**
+ * @brief 检查TAG的size字段和allocated bit是否和SIZE以及ALLOC给定值相符
+ * 
+ * @note TAG指的是header或者footer
+ * 
+ * @param tag 指向header或footer的指针
+ * @param size 目标大小
+ * @param alloc 目标分配情况
+ * @return true 相符
+ * @return false 不符
+ */
+static bool check_tag(word_t tag, size_t size, bool alloc){
+  return size == extract_size(tag) && alloc == extract_alloc(tag);
+}
+
 /*
  * ---------------------------------------------------------------------------
  *                        END SHORT HELPER FUNCTIONS
@@ -411,9 +430,9 @@ static block_t *find_prev(block_t *block) {
 /******** The remaining content below are helper and debug routines ********/
 
 /**
- * @brief free block时会被调用，检查并确定是否需要将与BLOCK邻接的free block与之合并
+ * @brief 检查并确定是否需要将与BLOCK邻接的free block与之合并
  * 
- * @note 需要分别处理四种不同的情况，处理后需根据新Block大小设置footer
+ * @note free block时会被调用，需要分别处理四种不同的情况，处理后需根据新Block大小设置footer
  * 
  * @par 四种不同的情况：
  * - 两边都已分配：只需将free list的头节点改成block即可；
@@ -475,12 +494,12 @@ static block_t *extend_heap(size_t size) {
   block_t *block = payload_to_header(bp);
   write_block(block, size, false);
 
-  // Create new epilogue header
-  block_t *block_next = find_next(block);
-  write_epilogue(block_next);
-
   // Coalesce in case the previous block was free
   block = coalesce_block(block);
+
+  // Create new epilogue header
+  block_t *block_next = find_next(block);
+  write_epilogue(block_next, block);
 
   return block;
 }
@@ -573,8 +592,6 @@ static block_t *find_fit(size_t asize) {
  */
 bool mm_checkheap(int line) {
   /*
-   * TODO: Delete this comment!
-   *
    * You will need to write the heap checker yourself.
    * Please keep modularity in mind when you're writing the heap checker!
    *
@@ -603,7 +620,7 @@ bool mm_checkheap(int line) {
  */
 bool mm_init(void) {
   // Create the initial empty heap
-  word_t *start = (word_t *)(mem_sbrk(2 * wsize));
+  word_t *start = (word_t *)(mem_sbrk(4 * wsize));
 
   if (start == (void *)-1) {
     return false;
@@ -623,8 +640,10 @@ bool mm_init(void) {
   // Heap starts with first "block header", currently the epilogue
   heap_start = (block_t *)&(start[1]);
 
+  block_t *first_block = NULL;
+
   // Extend the empty heap with a free block of chunksize bytes
-  if (extend_heap(chunksize) == NULL) {
+  if ((first_block = extend_heap(chunksize)) == NULL) {
     return false;
   }
 
