@@ -3,9 +3,9 @@
  * @brief A 64-bit struct-based implicit free list memory allocator
  *
  * 15-213: Introduction to Computer Systems
- * 
+ *
  * Explicit List实现：
- * 
+ *
  * Placement policy：first fit
  * Splitting policy：不少于最小块的大小即可
  * Coalescing policy：immediate coalesce
@@ -88,8 +88,8 @@ static const size_t wsize = sizeof(word_t);
 /** @brief Double word size (bytes) */
 static const size_t dsize = 2 * wsize;
 
-/** @brief Minimum block size (bytes) 
- * 
+/** @brief Minimum block size (bytes)
+ *
  * header + prev pointer + next pointer + footer
  */
 static const size_t min_block_size = 4 * dsize;
@@ -107,6 +107,12 @@ static const size_t chunksize = (1 << 12);
 static const word_t alloc_mask = 0x1;
 
 /**
+ * @brief 由于地址是双字对齐的，因此低4位不会被用到
+ *
+ */
+static const word_t low_order_mask = (word_t)0xF;
+
+/**
  * 用于计算Block大小的掩码，单位是Byte
  */
 static const word_t size_mask = ~(word_t)0xF;
@@ -117,10 +123,10 @@ typedef struct block {
   word_t header;
 
   /** @brief 指向free list中前一个block的指针 */
-  block_t * prev;
+  struct block *prev;
 
   /** @brief 指向free list中后一个block的指针 */
-  block_t * next;
+  struct block *next;
 
   /** @brief Same as header */
   word_t footer;
@@ -131,7 +137,7 @@ typedef struct block {
    * We don't know what the size of the payload will be, so we will declare
    * it as a zero-length array, which is a GCC compiler extension. This will
    * allow us to obtain a pointer to the start of the payload.
-   * 
+   *
    * 可以通过block->payload获取payload的地址
    *
    * WARNING: A zero-length array must be the last element in a struct, so
@@ -139,14 +145,14 @@ typedef struct block {
    * allow you to include a zero-length array in a union, as long as the
    * union is the last field in its containing struct. However, this is
    * compiler-specific behavior and should be avoided in general.
-   * 
+   *
    * 零长度数组字段必须是结构体的最后一个字段，但是可以将这个字段包在一个Union里边
    * 只需确保Union也是结构体的最后一个字段即可
    *
    * WARNING: DO NOT cast this pointer to/from other types! Instead, you
    * should use a union to alias this zero-length array with another struct,
    * in order to store additional types of data in the payload memory.
-   * 
+   *
    * 不要使用强制类型转换将此字段变为其他类型，最好使用一个Union将其包裹起来
    * 不过Union中的其他成员可以是结构体，可以使用它们来保存一些其他的数据
    */
@@ -162,9 +168,9 @@ typedef struct block {
 
 /* Global variables */
 
-/** 
+/**
  * @brief Pointer to first block in the heap
- * 
+ *
  * 实际是prologue的尾巴 */
 static block_t *heap_start = NULL;
 
@@ -302,7 +308,7 @@ static block_t *footer_to_header(word_t *footer) {
  */
 static size_t get_payload_size(block_t *block) {
   size_t asize = get_size(block);
-  return asize - dsize;
+  return asize - 3 * dsize;
 }
 
 /**
@@ -347,7 +353,7 @@ static void write_epilogue(block_t *block, block_t *prev) {
  * footer is computed in relation to the header.
  *
  * TODO: Are there any preconditions or postconditions?
- * 
+ *
  * @param[out] block The location to begin writing the block header
  * @param[in] size The size of the new block
  * @param[in] alloc The allocation status of the new block
@@ -407,102 +413,264 @@ static block_t *find_prev(block_t *block) {
 }
 
 /**
+ * @brief 遍历ROOT指向的链表，对其中所有元素调用AUX函数，执行失败即跳出循环。
+ * 同时还会检查链表中的空置节点是否和堆中的空置节点数量相同
+ * 
+ * @param root 指向链表第一个元素的指针
+ * @param aux 辅助函数，接受一个block_t*类型的参数，返回一个bool表示操作是否成功
+ * @param heap_count 堆中的节点数目
+ */
+static bool valid_list_iterate(block_t *root, bool aux(block_t *), size_t heap_count)
+{
+  bool validation = false;
+  const char *message = NULL;
+  size_t list_count = 0;
+  for (block_t *curr = root; get_size(root) != 0; curr = curr->next)
+  {
+    list_count++;
+    validation = aux(curr);
+    if (!validation)
+    {
+      message = "Aux fail";
+      goto done;
+    }
+  }
+
+  if(list_count != heap_count){
+    message = "List count not match with Heap count";
+    goto done;
+  }
+done:
+  if (!validation)
+  {
+    dbg_printf(message);
+  }
+  return validation;
+}
+
+/**
  * @brief 检查TAG的size字段和allocated bit是否和SIZE以及ALLOC给定值相符
- * 
+ *
  * @note TAG指的是header或者footer
- * 
+ *
  * @param tag 指向header或footer的指针
  * @param size 目标大小
  * @param alloc 目标分配情况
  * @return true 相符
  * @return false 不符
  */
-static bool check_tag(word_t tag, size_t size, bool alloc){
+static bool check_tag(word_t tag, size_t size, bool alloc) {
   return size == extract_size(tag) && alloc == extract_alloc(tag);
 }
 
 /**
  * @brief 检查ADDR所指代的地址是否指向堆中
- * 
- * @param addr 
- * @return true 
- * @return false 
+ *
+ * @param addr
+ * @return true
+ * @return false
  */
-static bool check_address_in_heap(word_t addr){
-  return addr <= mem_heap_hi() && addr >= mem_heap_lo();
+static bool check_address_in_heap(word_t addr) {
+  return addr <= (word_t)mem_heap_hi() && addr >= (word_t)mem_heap_lo();
+}
+
+/**
+ * @brief 检查WORD是否对齐双字，即低四位是否有东西
+ *
+ * @param word
+ * @return true
+ * @return false
+ */
+static bool check_word_align_dword(word_t word) {
+  return (word & low_order_mask) == (word_t)0;
 }
 
 /**
  * @brief 检查BLOCK是否对齐：payload起点对齐16Byte、BLOCK底部对齐16Byte
- * 
- * @param block 
- * @return true 
- * @return false 
+ *
+ * @param block
+ * @return true
+ * @return false
  */
-static bool check_block_align(block_t *block);
+static bool valid_block_align(block_t *block) {
+  bool validation = false;
+  const char *message = NULL;
+
+  validation = check_word_align_dword((word_t)block->payload);
+  if (!validation) {
+    message = "payload not alignment";
+    goto done;
+  }
+
+  validation = check_word_align_dword(find_next(block));
+  if (!validation) {
+    message = "block tail not alignment";
+    goto done;
+  }
+done:
+  if (!validation) {
+    dbg_printf(message);
+  }
+  return validation;
+}
 
 /**
  * @brief 检查BLOCK的大小是否大于最小值
- * 
- * @param block 
- * @return true 
- * @return false 
+ *
+ * @param block
+ * @return true
+ * @return false
  */
-static bool check_block_size(block_t *block);
+static bool check_block_size(block_t *block){
+  return get_size(block) >= min_block_size;
+}
 
 /**
  * @brief 检查BLOCK的header和footer是否相互匹配
- * 
- * @param block 
- * @return true 
- * @return false 
+ *
+ * @param block
+ * @return true
+ * @return false
  */
-static bool check_tags_match(block_t *block);
+static bool check_tags_match(block_t *block){
+  return block->header == block->footer;
+}
 
 /**
  * @brief 调用其他函数，总体检查BLOCK的格式
- * 
- * @param block 
- * @return true 
- * @return false 
+ *
+ * @param block
+ * @return true
+ * @return false
  */
-static bool check_block_format(block_t *block);
+static bool valid_block_format(block_t *block){
+  bool validation = false;
+  const char *message = NULL;
+
+  validation = check_block_size(block);
+  if (!validation)
+  {
+    message = "block smaller than min_block_size";
+    goto done;
+  }
+
+  validation = check_tags_match(block);
+  if (!validation)
+  {
+    message = "block header & footer not match";
+    goto done;
+  }
+
+  validation = valid_block_align(block);
+  if (!validation)
+  {
+    message = "block not align";
+    goto done;
+  }
+done:
+  if (!validation)
+  {
+    dbg_printf(message);
+  }
+  return validation;
+}
 
 /**
- * @brief 检查PREV和NEXT在链表中是否邻接以及地址是否合法
- * 
- * @param prev 
- * @param next 
- * @return true 
- * @return false 
+ * @brief 检查自己指向的节点的prev是否指向自己
+ *
+ * @param block
+ * @return true
+ * @return false
+ * @pre prev & next都必须指向堆内
  */
-static bool check_nodes_match(block_t *prev, block_t *next);
+static bool check_nodes_match(block_t *block){
+  return block == block->next->prev;
+}
 
 /**
- * @brief 调用其他函数，检查链表中指定节点是否合法
- * 
- * @param block 
- * @return true 
- * @return false 
+ * @brief 调用其他函数，检查链表中指定节点的prev和next是否都是合法的地址
+ *
+ * @param block
+ * @return true
+ * @return false
  */
-static bool check_list_node(block_t *block);
+static bool check_node_addr(block_t *block){
+  return check_address_in_heap(block->next) && check_address_in_heap(block->prev);
+}
 
 /**
- * @brief 计算堆中有多少个free block
- * 
- * @return size_t 
+ * @brief 检查BLOCK是否是一个合法的链表节点
+ *
+ * @param block
+ * @return true
+ * @return false
  */
-static size_t count_free_block();
+static bool valid_node(block_t *block){
+  bool validation = false;
+  const char *message = NULL;
+
+  validation = check_node_addr(block);
+  if (!validation)
+  {
+    message = "prev or next invalid";
+    goto done;
+  }
+
+  validation = check_nodes_match(block);
+  if (!validation)
+  {
+    message = "next block's prev don't point to this block";
+    goto done;
+  }
+done:
+  if (!validation)
+  {
+    dbg_printf(message);
+  }
+  return validation;
+}
 
 /**
- * @brief 检查ROOT指向的free list是否合法
- * 
- * @param root 
- * @param free_count free list中应该含有多少空置节点
- * @return true 
- * @return false 
+ * @brief 扫描堆中的每一个Block
+ *
+ * @return bool
  */
-static bool check_list(block_t *root, size_t free_count);
+static bool heap_scan(){
+  block_t *curr;
+  size_t count = 0;
+  bool valid = false;
+  const char* message = NULL;
+
+  // 检查堆中的每一个块的格式是否合法，同时统计其中free block的数目
+  for (curr = heap_start; get_size(curr) != 0; curr = find_next(curr))
+  {
+    valid = valid_block_align(curr) && valid_block_format(curr);
+    if (!valid)
+    {
+      message = "Block invalid";
+      goto done;
+    }
+
+    if (!get_alloc(curr))
+    {
+      count++;
+    }
+  }
+
+  valid = valid_list_iterate(free_list_root, valid_node, count);
+  if (!valid)
+  {
+    message = "List invalid";
+    goto done;
+  }
+  done:
+  if (!valid)
+  {
+    dbg_printf(message);
+  }
+  return valid;
+}
+
 
 /*
  * ---------------------------------------------------------------------------
@@ -514,15 +682,16 @@ static bool check_list(block_t *root, size_t free_count);
 
 /**
  * @brief 检查并确定是否需要将与BLOCK邻接的free block与之合并
- * 
- * @note free block时会被调用，需要分别处理四种不同的情况，处理后需根据新Block大小设置footer
- * 
+ *
+ * @note free
+ * block时会被调用，需要分别处理四种不同的情况，处理后需根据新Block大小设置footer
+ *
  * @par 四种不同的情况：
  * - 两边都已分配：只需将free list的头节点改成block即可；
  * - 左边或右边已释放：首先需要将该节点从free list中移除，随后将其与自身合并
  *   为一个新的Block，最后再将该Block移入free list；
  * - 两边都已释放：需要先将左右两个Block都从free list中移除，随后操作同上；
- * 
+ *
  * @param[in] block 等待合并的Block
  * @return 合并之后的Block的地址，可能和参数一致
  * @pre get_alloc(block) == false，footer无需设置
@@ -541,9 +710,9 @@ static block_t *coalesce_block(block_t *block) {
 
 /**
  * @brief 执行系统调用，将堆向上移动SIZE byte
- * 
+ *
  * @note SIZE会被向上取整为双字的倍数
- * 
+ *
  * @par 需要在堆末尾插入新Block时，需要这样做：
  * 1.next blcok的next为NULL，代表它是epilogue block，跳出循环；
  * 2.调用sbrk申请SIZE，注意实际移动的距离；
@@ -569,7 +738,7 @@ static block_t *extend_heap(size_t size) {
    * Think about what bp represents. Why do we write the new block
    * starting one word BEFORE bp, but with the same size that we
    * originally requested?
-   * 
+   *
    * 原来的epilogue block的位置会被占掉，正好补偿了
    */
 
@@ -588,8 +757,9 @@ static block_t *extend_heap(size_t size) {
 }
 
 /**
- * @brief 检查并确定是否需要将BLOCK拆分为大小分别ASIZE和block size - ASIZE的两个block
- * 
+ * @brief 检查并确定是否需要将BLOCK拆分为大小分别ASIZE和block size -
+ * ASIZE的两个block
+ *
  * @note 如果分割出来的大小小于min_block_size，那就不必分了
  *
  * @param[in] block 待拆分的block
@@ -615,7 +785,7 @@ static void split_block(block_t *block, size_t asize) {
 
 /**
  * @brief 在堆中寻找一个大小大于等于ASIZE的块
- * 
+ *
  * @par first fit
  *
  * @param[in] asize 目标大小
@@ -635,17 +805,17 @@ static block_t *find_fit(size_t asize) {
 
 /**
  * @brief 检查堆的不变性是否始终被满足
- * 
+ *
  * @par Heap check：
  * - epilogue & prologue blocks 格式检查（见下）；
  * - Coalesce检查：堆中不可以有任何两个连续的Free Block存在；
- * 
+ *
  * @par List check：
  * - 前后两个Block需具有正确的next/previous指向；
  * - 所有指针都位于mem heap lo() & mem heap high()之间；
  * - 遍历堆得到的Free block数目应该和遍历free list得到的数目一致；
  * - segregated list相关（ @todo ）
- * 
+ *
  * @par Block check：
  * - Block地址均对齐16Byte；
  * - Block都在Heap的边界之内；
@@ -660,15 +830,16 @@ static block_t *find_fit(size_t asize) {
  * - next元素始终为NULL：可用于检测是否到达free list的末尾；
  * - prev元素始终指向block_t：可将初次插入以及后续插入
  *   平凡化为同一种情况，将其当作普通的block修改指针即可；
- * - 由于堆初始情况下即包含有一个大小为chunksize的block，因此prev元素不可为NULL；
- * 
+ * -
+ * 由于堆初始情况下即包含有一个大小为chunksize的block，因此prev元素不可为NULL；
+ *
  * @par coalesce block方面，epilogue block和prologue blcok都需保持
  * allocated bit为1，以便将边界coalesce情况化为平凡情况
- * 
+ *
  * @par free list需保持如下不变性：
  * - 头部节点prev必然为NULL；
  * - 尾部节点必须是epilogue block；
- * 
+ *
  *
  * @param[in] line 被调用时的行号
  * @return 堆是否满足不变性
@@ -685,24 +856,23 @@ bool mm_checkheap(int line) {
    * do you eat it with a pair of chopsticks, or with a spoon?
    */
 
-  bool validation  = false;
+  bool validation = false;
 
   // 检查prologue block格式
   validation = check_tag(*find_prev_footer(heap_start), 0, true);
-  if(!validation){
-    perror("prologue block format error!");
+  if (!validation) {
+    dbg_printf("prologue block format error!");
     return false;
   }
 
   // 检查free list中所有的block
-
 
   return true;
 }
 
 /**
  * @brief 初始化堆
- * 
+ *
  * @par 初始状况下的堆长度为64Byte (4 DWord) + chunksize：
  * - DWord1：prologue block的footer；
  * - DWord2：epilogue block的header；
@@ -725,7 +895,7 @@ bool mm_init(void) {
    * TODO: delete or replace this comment once you've thought about it.
    * Think about why we need a heap prologue and epilogue. Why do
    * they correspond to a block footer and header respectively?
-   * 
+   *
    * 主要的目的是用来标识堆的边界
    */
 
@@ -747,13 +917,13 @@ bool mm_init(void) {
 
 /**
  * @brief 获取一个指定大小的Block，可能调用sbrk
- * 
+ *
  * @par 需执行的操作如下：
  * 1.find_fit：遍历free list，寻找合适的free block；
  *   1.找到了：将其移出free list；
  *   2.没有找到：调用extend_heap拓展堆；
  * 2.split_block：根据占用大小对其进行分割；
- * 
+ *
  * @param[in] size 目标payload的大小，不一定是倍数
  * @return 合适payload的地址
  * @post 返回地址需对齐Dword
@@ -812,7 +982,7 @@ void *malloc(size_t size) {
 
 /**
  * @brief 释放目标BP指向的block
- * 
+ *
  * @par 需执行的操作如下：
  * 1.将指定Block从free list中移出；
  * 2.将其状态标记为free；
