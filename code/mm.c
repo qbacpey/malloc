@@ -421,6 +421,89 @@ static bool check_tag(word_t tag, size_t size, bool alloc){
   return size == extract_size(tag) && alloc == extract_alloc(tag);
 }
 
+/**
+ * @brief 检查ADDR所指代的地址是否指向堆中
+ * 
+ * @param addr 
+ * @return true 
+ * @return false 
+ */
+static bool check_address_in_heap(word_t addr){
+  return addr <= mem_heap_hi() && addr >= mem_heap_lo();
+}
+
+/**
+ * @brief 检查BLOCK是否对齐：payload起点对齐16Byte、BLOCK底部对齐16Byte
+ * 
+ * @param block 
+ * @return true 
+ * @return false 
+ */
+static bool check_block_align(block_t *block);
+
+/**
+ * @brief 检查BLOCK的大小是否大于最小值
+ * 
+ * @param block 
+ * @return true 
+ * @return false 
+ */
+static bool check_block_size(block_t *block);
+
+/**
+ * @brief 检查BLOCK的header和footer是否相互匹配
+ * 
+ * @param block 
+ * @return true 
+ * @return false 
+ */
+static bool check_tags_match(block_t *block);
+
+/**
+ * @brief 调用其他函数，总体检查BLOCK的格式
+ * 
+ * @param block 
+ * @return true 
+ * @return false 
+ */
+static bool check_block_format(block_t *block);
+
+/**
+ * @brief 检查PREV和NEXT在链表中是否邻接以及地址是否合法
+ * 
+ * @param prev 
+ * @param next 
+ * @return true 
+ * @return false 
+ */
+static bool check_nodes_match(block_t *prev, block_t *next);
+
+/**
+ * @brief 调用其他函数，检查链表中指定节点是否合法
+ * 
+ * @param block 
+ * @return true 
+ * @return false 
+ */
+static bool check_list_node(block_t *block);
+
+/**
+ * @brief 计算堆中有多少个free block
+ * 
+ * @return size_t 
+ */
+static size_t count_free_block();
+
+/**
+ * @brief 检查ROOT指向的free list是否合法
+ * 
+ * @param root 
+ * @param free_count free list中应该含有多少空置节点
+ * @return true 
+ * @return false 
+ */
+static bool check_list(block_t *root, size_t free_count);
+
 /*
  * ---------------------------------------------------------------------------
  *                        END SHORT HELPER FUNCTIONS
@@ -601,6 +684,18 @@ bool mm_checkheap(int line) {
    * Internal use only: If you mix guacamole on your bibimbap,
    * do you eat it with a pair of chopsticks, or with a spoon?
    */
+
+  bool validation  = false;
+
+  // 检查prologue block格式
+  validation = check_tag(*find_prev_footer(heap_start), 0, true);
+  if(!validation){
+    perror("prologue block format error!");
+    return false;
+  }
+
+  // 检查free list中所有的block
+
 
   return true;
 }
