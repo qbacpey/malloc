@@ -415,34 +415,31 @@ static block_t *find_prev(block_t *block) {
 /**
  * @brief 遍历ROOT指向的链表，对其中所有元素调用AUX函数，执行失败即跳出循环。
  * 同时还会检查链表中的空置节点是否和堆中的空置节点数量相同
- * 
+ *
  * @param root 指向链表第一个元素的指针
  * @param aux 辅助函数，接受一个block_t*类型的参数，返回一个bool表示操作是否成功
  * @param heap_count 堆中的节点数目
  */
-static bool valid_list_iterate(block_t *root, bool aux(block_t *), size_t heap_count)
-{
+static bool valid_list_iterate(block_t *root, bool aux(block_t *),
+                               size_t heap_count) {
   bool validation = false;
   const char *message = NULL;
   size_t list_count = 0;
-  for (block_t *curr = root; get_size(root) != 0; curr = curr->next)
-  {
+  for (block_t *curr = root; get_size(curr) != 0; curr = curr->next) {
     list_count++;
     validation = aux(curr);
-    if (!validation)
-    {
+    if (!validation) {
       message = "Aux fail";
       goto done;
     }
   }
 
-  if(list_count != heap_count){
+  if (list_count != heap_count) {
     message = "List count not match with Heap count";
     goto done;
   }
 done:
-  if (!validation)
-  {
+  if (!validation) {
     dbg_printf(message);
   }
   return validation;
@@ -521,7 +518,7 @@ done:
  * @return true
  * @return false
  */
-static bool check_block_size(block_t *block){
+static bool check_block_size(block_t *block) {
   return get_size(block) >= min_block_size;
 }
 
@@ -532,7 +529,7 @@ static bool check_block_size(block_t *block){
  * @return true
  * @return false
  */
-static bool check_tags_match(block_t *block){
+static bool check_tags_match(block_t *block) {
   return block->header == block->footer;
 }
 
@@ -543,33 +540,29 @@ static bool check_tags_match(block_t *block){
  * @return true
  * @return false
  */
-static bool valid_block_format(block_t *block){
+static bool valid_block_format(block_t *block) {
   bool validation = false;
   const char *message = NULL;
 
   validation = check_block_size(block);
-  if (!validation)
-  {
+  if (!validation) {
     message = "block smaller than min_block_size";
     goto done;
   }
 
   validation = check_tags_match(block);
-  if (!validation)
-  {
+  if (!validation) {
     message = "block header & footer not match";
     goto done;
   }
 
   validation = valid_block_align(block);
-  if (!validation)
-  {
+  if (!validation) {
     message = "block not align";
     goto done;
   }
 done:
-  if (!validation)
-  {
+  if (!validation) {
     dbg_printf(message);
   }
   return validation;
@@ -583,19 +576,21 @@ done:
  * @return false
  * @pre prev & next都必须指向堆内
  */
-static bool check_nodes_match(block_t *block){
+static bool check_nodes_match(block_t *block) {
   return block == block->next->prev;
 }
 
 /**
- * @brief 调用其他函数，检查链表中指定节点的prev和next是否都是合法的地址
+ * @brief 调用其他函数，检查链表中指定节点的prev和next是否都是合法的地址。
+ * 如果是链表头节点的话，那么prev可能为NULL
  *
  * @param block
  * @return true
  * @return false
  */
-static bool check_node_addr(block_t *block){
-  return check_address_in_heap(block->next) && check_address_in_heap(block->prev);
+static bool check_node_addr(block_t *block) {
+  return check_address_in_heap(block->next) &&
+         (check_address_in_heap(block->prev) || block->prev == NULL );
 }
 
 /**
@@ -605,72 +600,29 @@ static bool check_node_addr(block_t *block){
  * @return true
  * @return false
  */
-static bool valid_node(block_t *block){
+static bool valid_node(block_t *block) {
   bool validation = false;
   const char *message = NULL;
 
+  // 检查next以及prev指针
   validation = check_node_addr(block);
-  if (!validation)
-  {
+  if (!validation) {
     message = "prev or next invalid";
     goto done;
   }
 
+  // 检查header和footer是否匹配
   validation = check_nodes_match(block);
-  if (!validation)
-  {
+  if (!validation) {
     message = "next block's prev don't point to this block";
     goto done;
   }
 done:
-  if (!validation)
-  {
+  if (!validation) {
     dbg_printf(message);
   }
   return validation;
 }
-
-/**
- * @brief 扫描堆中的每一个Block
- *
- * @return bool
- */
-static bool heap_scan(){
-  block_t *curr;
-  size_t count = 0;
-  bool valid = false;
-  const char* message = NULL;
-
-  // 检查堆中的每一个块的格式是否合法，同时统计其中free block的数目
-  for (curr = heap_start; get_size(curr) != 0; curr = find_next(curr))
-  {
-    valid = valid_block_align(curr) && valid_block_format(curr);
-    if (!valid)
-    {
-      message = "Block invalid";
-      goto done;
-    }
-
-    if (!get_alloc(curr))
-    {
-      count++;
-    }
-  }
-
-  valid = valid_list_iterate(free_list_root, valid_node, count);
-  if (!valid)
-  {
-    message = "List invalid";
-    goto done;
-  }
-  done:
-  if (!valid)
-  {
-    dbg_printf(message);
-  }
-  return valid;
-}
-
 
 /*
  * ---------------------------------------------------------------------------
@@ -856,18 +808,51 @@ bool mm_checkheap(int line) {
    * do you eat it with a pair of chopsticks, or with a spoon?
    */
 
-  bool validation = false;
+  bool valid = false;
+  const char *message = NULL;
 
   // 检查prologue block格式
-  validation = check_tag(*find_prev_footer(heap_start), 0, true);
-  if (!validation) {
-    dbg_printf("prologue block format error!");
-    return false;
+  valid = check_tag(*find_prev_footer(heap_start), 0, true);
+  if (!valid) {
+    message = "prologue block format error!";
+    goto done;
   }
 
   // 检查free list中所有的block
+  block_t *curr;
+  size_t count = 0;
 
-  return true;
+  // 检查堆中的每一个块的格式是否合法，同时统计其中free block的数目
+  for (curr = heap_start; get_size(curr) != 0; curr = find_next(curr)) {
+    valid = valid_block_align(curr) && valid_block_format(curr);
+    if (!valid) {
+      message = "Block invalid";
+      goto done;
+    }
+
+    if (!get_alloc(curr)) {
+      count++;
+    }
+  }
+
+  // 检查epilogue block是否合法
+  valid = curr->next == NULL;
+  if (!valid) {
+    message = "epilogue Block invalid";
+    goto done;
+  }
+
+  // 遍历链表中的所有节点，检查它们是否合法 
+  valid = valid_list_iterate(free_list_root, valid_node, count);
+  if (!valid) {
+    message = "List invalid";
+    goto done;
+  }
+done:
+  if (!valid) {
+    dbg_printf(message);
+  }
+  return valid;
 }
 
 /**
