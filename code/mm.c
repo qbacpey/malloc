@@ -355,6 +355,7 @@ static void write_epilogue(block_t *block, block_t *prev) {
 /**
  * @brief Writes a block starting at the given address.
  * @pre size >= min_block_size
+ * @pre size 对齐 16Byte
  *
  * This function writes both a header and footer, where the location of the
  * footer is computed in relation to the header.
@@ -367,7 +368,9 @@ static void write_epilogue(block_t *block, block_t *prev) {
  */
 static void write_block(block_t *block, size_t size, bool alloc) {
   dbg_requires(block != NULL);
-  dbg_requires(size > 0);
+  dbg_requires(size >= min_block_size);
+  dbg_requires((size & low_order_mask) == (word_t)0);
+
   block->header = pack(size, alloc);
   word_t *footerp = header_to_footer(block);
   *footerp = pack(size, alloc);
@@ -521,7 +524,7 @@ static block_t *pop_front(block_t **root) {
  * @return block_t*
  * @pre BLOCK必须位于某个链表中，前后都必须有元素
  */
-static block_t *remove_block(block_t *block) {
+static void remove_block(block_t *block) {
   dbg_assert(block != NULL);
   dbg_assert(block->prev != NULL);
   dbg_assert(get_size(block) != 0);
@@ -529,6 +532,7 @@ static block_t *remove_block(block_t *block) {
   dbg_assert(check_free_block_aux(block) == true);
 
   block->next->prev = block->prev;
+  block->prev->next = block->next;
 }
 
 /**
@@ -840,22 +844,24 @@ static block_t *coalesce_block(block_t *block) {
       push_front(&heap_start, block);
     } else {
       // Case 2 右边已释放
+      remove_block(adj_front);
+      write_block(adj_front, get_size(adj_front) + get_size(block), false);
+      push_front(&heap_start ,adj_front);
     }
   } else {
     if (adj_back_allocated) {
-      // Case 3 左边已释放
+    // Case 3 左边已释放
+      remove_block(adj_back);
+      write_block(block,  get_size(block) + get_size(adj_back), false);
+      push_front(&heap_start ,block);
     } else {
-      // Case 4 两边都已释放
+    // Case 4 两边都已释放
+      remove_block(adj_front);
+      remove_block(adj_back);
+      write_block(adj_front, get_size(adj_front) + get_size(block) + get_size(adj_back), false);
+      push_front(&heap_start ,adj_front);
     }
   }
-  /*
-   * TODO: delete or replace this comment once you've thought about it.
-   * Think about how coalesce_block should be implemented, it would be helpful
-   * to review the lecture Dynamic Memory Allocation: Advanced. Consider the
-   * four cases that you reviewed when writing your traces, how will you
-   * account for all of these?
-   */
-
   return block;
 }
 
