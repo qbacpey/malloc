@@ -413,40 +413,66 @@ static block_t *find_prev(block_t *block) {
 }
 
 /**
- * @brief 将BACK插入到FRONT之后
+ * @brief 将CURR插入到FRONT之后
  * 
- * @param front block_t，BACK会被插入到它之后
- * @param back block_t，不可位于任何链表中
- * @pre FRONT和BACK都不可以是已分配的块
+ * @note FRONT不可以是链表的最后一个元素
+ * 
+ * @param front block_t，CURR会被插入到它之后
+ * @param curr block_t，不可位于任何链表中
+ * @pre FRONT和CURR都不可以是已分配的块
+ * FRONT不可以是链表的最后一个元素
  */
-static void insert_after(block_t *front, block_t *back);
+static void insert_after(block_t *front, block_t *curr){
+  curr->next = front->next;
+  curr->prev = front;
+  front->next = curr;
+  curr->next->prev = curr;
+}
 
 /**
- * @brief 将FRONT插入到BACK之前
+ * @brief 将CURR插入到BACK之前
  * 
- * @param front 不可位于任何链表中
- * @param back FRONT会被插入到它之前
- * @pre FRONT和BACK都不可以是已分配的块
+ * @note CURR不可以是链表的第一个元素
+ * 
+ * @param curr 不可位于任何链表中
+ * @param back CURR会被插入到它之前
+ * @pre CURR和BACK都不可以是已分配的块
+ * CURR不可以是链表的第一个元素
  */
-static void insert_before(block_t *front, block_t *back);
+static void insert_before(block_t *curr, block_t *back){
+  curr->prev = back->prev;
+  curr->next = back;
+  back->prev = curr;
+  curr->prev->next = curr;
+}
 
 /**
  * @brief 将NEW_HEAD插入到ROOT所指向的链表的头部
  * 
- * @param root 指向链表的第一个元素
+ * @param root 指向链表的第一个元素的指针
  * @param new_head 将要被插入到ROOT所指向的链表的元素
  * @pre NEW_HEAD不可以是已分配的块
  */
-static void push_front(block_t *root, block_t *new_head);
+static void push_front(block_t **root, block_t *new_head){
+  new_head->next = *root;
+  new_head->prev = NULL;
+  (*root)->prev = new_head;
+  *root = new_head;
+}
 
 /**
  * @brief 将ROOT所指向的链表的第一个元素移出链表，并将其返回
  * 
- * @param root 指向链表的第一个元素
+ * @param root 指向链表的第一个元素指针
  * @return block_t* 链表的原第一个元素
  * @pre ROOT不能为NULL
  */
-static block_t * pop_front(block_t *root);
+static block_t * pop_front(block_t **root){
+  block_t *old_head = *root;
+  old_head->next->prev = NULL;
+  (*root) = old_head->next;
+  return old_head;
+}
 
 /**
  * @brief 将BLOCK之前的元素移出链表
@@ -456,7 +482,12 @@ static block_t * pop_front(block_t *root);
  * @param block 
  * @return block_t* 
  */
-static block_t * remove_before(block_t *block);
+static block_t * remove_before(block_t *block){
+  block_t *removed = block->prev;
+  removed->prev->next = block;
+  block->prev = removed->prev;
+  return removed;
+}
 
 /**
  * @brief 将BLOCK之后的元素移出链表
@@ -466,7 +497,12 @@ static block_t * remove_before(block_t *block);
  * @param block 
  * @return block_t* 
  */
-static block_t * remove_after(block_t *block);
+static block_t * remove_after(block_t *block){
+  block_t *removed = block->next;
+  removed->next->prev = block;
+  block->next = removed->next;
+  return removed;
+}
 
 /**
  * @brief 遍历ROOT指向的链表，对其中所有元素调用AUX函数，执行失败即跳出循环。
