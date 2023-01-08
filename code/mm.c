@@ -200,6 +200,13 @@ static block_t *free_list_root = NULL;
  * ---------------------------------------------------------------------------
  */
 
+/* Declaration start */
+
+static bool check_free_block_aux(block_t *);
+static bool valid_block_format(block_t *);
+
+/* Declaration end */
+
 /**
  * @brief Returns the maximum of two integers.
  * @param[in] x
@@ -408,21 +415,31 @@ static word_t *find_prev_footer(block_t *block) {
 static block_t *find_prev(block_t *block) {
   dbg_requires(block != NULL);
   dbg_requires(get_size(block) != 0);
+
   word_t *footerp = find_prev_footer(block);
   return footer_to_header(footerp);
 }
 
 /**
  * @brief 将CURR插入到FRONT之后
- * 
+ *
  * @note FRONT不可以是链表的最后一个元素
- * 
+ *
  * @param front block_t，CURR会被插入到它之后
  * @param curr block_t，不可位于任何链表中
  * @pre FRONT和CURR都不可以是已分配的块
  * FRONT不可以是链表的最后一个元素
  */
-static void insert_after(block_t *front, block_t *curr){
+static void insert_after(block_t *front, block_t *curr) {
+  dbg_assert(front != NULL);
+  dbg_assert(get_size(front) != 0);
+  dbg_assert(get_alloc(front) == false);
+  dbg_assert(check_free_block_aux(front) == true);
+  dbg_assert(curr != NULL);
+  dbg_assert(get_size(curr) != 0);
+  dbg_assert(get_alloc(curr) == false);
+  dbg_assert(valid_block_format(curr) == true);
+
   curr->next = front->next;
   curr->prev = front;
   front->next = curr;
@@ -431,15 +448,24 @@ static void insert_after(block_t *front, block_t *curr){
 
 /**
  * @brief 将CURR插入到BACK之前
- * 
+ *
  * @note CURR不可以是链表的第一个元素
- * 
+ *
  * @param curr 不可位于任何链表中
  * @param back CURR会被插入到它之前
  * @pre CURR和BACK都不可以是已分配的块
  * CURR不可以是链表的第一个元素
  */
-static void insert_before(block_t *curr, block_t *back){
+static void insert_before(block_t *curr, block_t *back) {
+  dbg_assert(back != NULL);
+  dbg_assert(get_size(back) != 0);
+  dbg_assert(get_alloc(back) == false);
+  dbg_assert(check_free_block_aux(back) == true);
+  dbg_assert(curr != NULL);
+  dbg_assert(get_size(curr) != 0);
+  dbg_assert(get_alloc(curr) == false);
+  dbg_assert(valid_block_format(curr) == true);
+
   curr->prev = back->prev;
   curr->next = back;
   back->prev = curr;
@@ -448,12 +474,20 @@ static void insert_before(block_t *curr, block_t *back){
 
 /**
  * @brief 将NEW_HEAD插入到ROOT所指向的链表的头部
- * 
+ *
  * @param root 指向链表的第一个元素的指针
  * @param new_head 将要被插入到ROOT所指向的链表的元素
  * @pre NEW_HEAD不可以是已分配的块
  */
-static void push_front(block_t **root, block_t *new_head){
+static void push_front(block_t **root, block_t *new_head) {
+  dbg_assert(root != NULL);
+  dbg_assert(&root != NULL);
+  dbg_assert(check_free_block_aux(&root) == true);
+  dbg_assert(new_head != NULL);
+  dbg_assert(get_size(new_head) != 0);
+  dbg_assert(get_alloc(new_head) == false);
+  dbg_assert(valid_block_format(new_head) == true);
+
   new_head->next = *root;
   new_head->prev = NULL;
   (*root)->prev = new_head;
@@ -462,12 +496,16 @@ static void push_front(block_t **root, block_t *new_head){
 
 /**
  * @brief 将ROOT所指向的链表的第一个元素移出链表，并将其返回
- * 
+ *
  * @param root 指向链表的第一个元素指针
  * @return block_t* 链表的原第一个元素
  * @pre ROOT不能为NULL
  */
-static block_t * pop_front(block_t **root){
+static block_t *pop_front(block_t **root) {
+  dbg_assert(root != NULL);
+  dbg_assert(&root != NULL);
+  dbg_assert(check_free_block_aux(&root) == true);
+
   block_t *old_head = *root;
   old_head->next->prev = NULL;
   (*root) = old_head->next;
@@ -475,14 +513,38 @@ static block_t * pop_front(block_t **root){
 }
 
 /**
- * @brief 将BLOCK之前的元素移出链表
- * 
- * @note BLOCK不可以是链表头部
- * 
- * @param block 
- * @return block_t* 
+ * @brief 将BLOCK从链表中移出链表
+ *
+ * @note BLOCK不能为prologue block或者epilogue block
+ *
+ * @param block
+ * @return block_t*
+ * @pre BLOCK必须位于某个链表中，前后都必须有元素
  */
-static block_t * remove_before(block_t *block){
+static block_t *remove_block(block_t *block) {
+  dbg_assert(block != NULL);
+  dbg_assert(block->prev != NULL);
+  dbg_assert(get_size(block) != 0);
+  dbg_assert(get_alloc(block) == false);
+  dbg_assert(check_free_block_aux(block) == true);
+
+  block->next->prev = block->prev;
+}
+
+/**
+ * @brief 将BLOCK之前的元素移出链表
+ *
+ * @note BLOCK不可以是链表头部
+ *
+ * @param block
+ * @return block_t*
+ */
+static block_t *remove_before(block_t *block) {
+  dbg_assert(block != NULL);
+  dbg_assert(get_size(block) != 0);
+  dbg_assert(get_alloc(block) == false);
+  dbg_assert(check_free_block_aux(block) == true);
+
   block_t *removed = block->prev;
   removed->prev->next = block;
   block->prev = removed->prev;
@@ -491,13 +553,18 @@ static block_t * remove_before(block_t *block){
 
 /**
  * @brief 将BLOCK之后的元素移出链表
- * 
+ *
  * @note BLOCK不可以是链表尾部
- * 
- * @param block 
- * @return block_t* 
+ *
+ * @param block
+ * @return block_t*
  */
-static block_t * remove_after(block_t *block){
+static block_t *remove_after(block_t *block) {
+  dbg_assert(block != NULL);
+  dbg_assert(get_size(block) != 0);
+  dbg_assert(get_alloc(block) == false);
+  dbg_assert(check_free_block_aux(block) == true);
+
   block_t *removed = block->next;
   removed->next->prev = block;
   block->next = removed->next;
@@ -682,7 +749,7 @@ static bool check_nodes_match(block_t *block) {
  */
 static bool check_node_addr(block_t *block) {
   return check_address_in_heap(block->next) &&
-         (check_address_in_heap(block->prev) || block->prev == NULL );
+         (check_address_in_heap(block->prev) || block->prev == NULL);
 }
 
 /**
@@ -716,6 +783,17 @@ done:
   return validation;
 }
 
+/**
+ * @brief 调试用辅助函数
+ * 
+ * @param block 
+ * @return true 
+ * @return false 
+ */
+static bool check_free_block_aux(block_t *block){
+  return valid_block_format(block) && valid_node(block);
+}
+
 /*
  * ---------------------------------------------------------------------------
  *                        END SHORT HELPER FUNCTIONS
@@ -727,8 +805,12 @@ done:
 /**
  * @brief 检查并确定是否需要将与BLOCK邻接的free block与之合并
  *
- * @note free
- * block时会被调用，需要分别处理四种不同的情况，处理后需根据新Block大小设置footer
+ * @note BLOCK必须处于空置状态且不位于任何链表中
+ *
+ * @par 此函数可能会操作链表
+ *
+ * @par free block时会被调用，需要分别处理四种不同的情况，
+ * 处理后需根据新Block大小设置footer
  *
  * @par 四种不同的情况：
  * - 两边都已分配：只需将free list的头节点改成block即可；
@@ -739,8 +821,33 @@ done:
  * @param[in] block 等待合并的Block
  * @return 合并之后的Block的地址，可能和参数一致
  * @pre get_alloc(block) == false，footer无需设置
+ * @pre BLOCK不位于任何链表中
+ * @pre BLOCK不可以是prologue block或者epilogue block
  */
 static block_t *coalesce_block(block_t *block) {
+  dbg_assert(get_alloc(block) == false);
+  dbg_assert(get_size(block) != 0);
+
+  // 获取堆中前后邻接的Block
+  block_t *adj_front = find_prev(block);
+  block_t *adj_back = find_next(block);
+  bool adj_front_allocated = get_alloc(adj_front);
+  bool adj_back_allocated = get_alloc(adj_back);
+
+  if (adj_front_allocated) {
+    if (adj_back_allocated) {
+      // Case 1 两边都已分配
+      push_front(&heap_start, block);
+    } else {
+      // Case 2 右边已释放
+    }
+  } else {
+    if (adj_back_allocated) {
+      // Case 3 左边已释放
+    } else {
+      // Case 4 两边都已释放
+    }
+  }
   /*
    * TODO: delete or replace this comment once you've thought about it.
    * Think about how coalesce_block should be implemented, it would be helpful
@@ -916,7 +1023,7 @@ bool mm_checkheap(int line) {
 
   // 检查堆中的每一个块的格式是否合法，同时统计其中free block的数目
   for (curr = heap_start; get_size(curr) != 0; curr = find_next(curr)) {
-    valid = valid_block_align(curr) && valid_block_format(curr);
+    valid = valid_block_format(curr);
     if (!valid) {
       message = "Block invalid";
       goto done;
@@ -934,7 +1041,7 @@ bool mm_checkheap(int line) {
     goto done;
   }
 
-  // 遍历链表中的所有节点，检查它们是否合法 
+  // 遍历链表中的所有节点，检查它们是否合法
   valid = valid_list_iterate(free_list_root, valid_node, count);
   if (!valid) {
     message = "List invalid";
