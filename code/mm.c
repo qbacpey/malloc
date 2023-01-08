@@ -413,6 +413,62 @@ static block_t *find_prev(block_t *block) {
 }
 
 /**
+ * @brief 将BACK插入到FRONT之后
+ * 
+ * @param front block_t，BACK会被插入到它之后
+ * @param back block_t，不可位于任何链表中
+ * @pre FRONT和BACK都不可以是已分配的块
+ */
+static void insert_after(block_t *front, block_t *back);
+
+/**
+ * @brief 将FRONT插入到BACK之前
+ * 
+ * @param front 不可位于任何链表中
+ * @param back FRONT会被插入到它之前
+ * @pre FRONT和BACK都不可以是已分配的块
+ */
+static void insert_before(block_t *front, block_t *back);
+
+/**
+ * @brief 将NEW_HEAD插入到ROOT所指向的链表的头部
+ * 
+ * @param root 指向链表的第一个元素
+ * @param new_head 将要被插入到ROOT所指向的链表的元素
+ * @pre NEW_HEAD不可以是已分配的块
+ */
+static void push_front(block_t *root, block_t *new_head);
+
+/**
+ * @brief 将ROOT所指向的链表的第一个元素移出链表，并将其返回
+ * 
+ * @param root 指向链表的第一个元素
+ * @return block_t* 链表的原第一个元素
+ * @pre ROOT不能为NULL
+ */
+static block_t * pop_front(block_t *root);
+
+/**
+ * @brief 将BLOCK之前的元素移出链表
+ * 
+ * @note BLOCK不可以是链表头部
+ * 
+ * @param block 
+ * @return block_t* 
+ */
+static block_t * remove_before(block_t *block);
+
+/**
+ * @brief 将BLOCK之后的元素移出链表
+ * 
+ * @note BLOCK不可以是链表尾部
+ * 
+ * @param block 
+ * @return block_t* 
+ */
+static block_t * remove_after(block_t *block);
+
+/**
  * @brief 遍历ROOT指向的链表，对其中所有元素调用AUX函数，执行失败即跳出循环。
  * 同时还会检查链表中的空置节点是否和堆中的空置节点数量相同
  *
