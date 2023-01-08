@@ -81,6 +81,7 @@
 /* Basic constants */
 
 typedef uint64_t word_t;
+typedef uint8_t byte_t;
 
 /** @brief Word and header size (bytes) */
 static const size_t wsize = sizeof(word_t);
@@ -91,8 +92,11 @@ static const size_t dsize = 2 * wsize;
 /** @brief Minimum block size (bytes)
  *
  * header + prev pointer + next pointer + footer
+ * 不允许Payload为0
  */
-static const size_t min_block_size = 4 * dsize;
+static const size_t min_block_size = 4 * wsize + dsize;
+
+static const size_t overhead_size = 4 * wsize;
 
 /**
  * sbrk一次移动的最小长度，现在是4KB
@@ -204,6 +208,7 @@ static block_t *free_list_root = NULL;
 
 static bool check_free_block_aux(block_t *);
 static bool valid_block_format(block_t *);
+static bool check_word_align_dword(word_t);
 
 /* Declaration end */
 
@@ -290,7 +295,7 @@ static void *header_to_payload(block_t *block) {
  * @return A pointer to the block's footer
  */
 static word_t *header_to_footer(block_t *block) {
-  return (word_t *)(block->payload + get_size(block) - dsize);
+  return (word_t *)(block->payload + get_size(block) - 3 * wsize);
 }
 
 /**
@@ -315,7 +320,7 @@ static block_t *footer_to_header(word_t *footer) {
  */
 static size_t get_payload_size(block_t *block) {
   size_t asize = get_size(block);
-  return asize - 3 * dsize;
+  return asize - overhead_size;
 }
 
 /**
@@ -339,17 +344,15 @@ static bool get_alloc(block_t *block) { return extract_alloc(block->header); }
  * @brief Writes an epilogue header at the given address.
  *
  * The epilogue header has size 0, and is marked as allocated.
- * next元素始终为NULL，prev元素始终指向free list中的前一个元素（block_t）
  *
  * @param[out] block The location to write the epilogue header
- * @pre block == mem_heap_hi() - 7 - 8 - 8
+ * @pre block == mem_heap_hi() - 7
  */
-static void write_epilogue(block_t *block, block_t *prev) {
+static void write_epilogue(block_t *block) {
   dbg_requires(block != NULL);
-  dbg_requires((char *)block == mem_heap_hi() - 7 - dsize - dsize);
+  dbg_requires((char *)block == mem_heap_hi() - 7);
+
   block->header = pack(0, true);
-  block->prev = prev;
-  block->next = NULL;
 }
 
 /**
@@ -369,7 +372,7 @@ static void write_epilogue(block_t *block, block_t *prev) {
 static void write_block(block_t *block, size_t size, bool alloc) {
   dbg_requires(block != NULL);
   dbg_requires(size >= min_block_size);
-  dbg_requires((size & low_order_mask) == (word_t)0);
+  dbg_requires(check_word_align_dword((word_t)size));
 
   block->header = pack(size, alloc);
   word_t *footerp = header_to_footer(block);
@@ -446,7 +449,8 @@ static void insert_after(block_t *front, block_t *curr) {
   curr->next = front->next;
   curr->prev = front;
   front->next = curr;
-  curr->next->prev = curr;
+  if(curr->next != NULL)
+    curr->next->prev = curr;
 }
 
 /**
@@ -472,7 +476,8 @@ static void insert_before(block_t *curr, block_t *back) {
   curr->prev = back->prev;
   curr->next = back;
   back->prev = curr;
-  curr->prev->next = curr;
+  if(curr->prev != NULL)
+    curr->prev->next = curr;
 }
 
 /**
@@ -522,7 +527,7 @@ static block_t *pop_front(block_t **root) {
  *
  * @param block
  * @return block_t*
- * @pre BLOCK必须位于某个链表中，前后都必须有元素
+ * @pre BLOCK必须位于某个链表中，可以是头节点
  */
 static void remove_block(block_t *block) {
   dbg_assert(block != NULL);
@@ -531,14 +536,19 @@ static void remove_block(block_t *block) {
   dbg_assert(get_alloc(block) == false);
   dbg_assert(check_free_block_aux(block) == true);
 
-  block->next->prev = block->prev;
-  block->prev->next = block->next;
+  // TODO 如果是升级为segregate list的话，那么这里的实现需要修改
+  if(block->next != NULL){
+    block->next->prev = block->prev;
+  }
+  if(block->prev != NULL){
+    block->prev->next = block->next;
+  }
 }
 
 /**
  * @brief 将BLOCK之前的元素移出链表
  *
- * @note BLOCK不可以是链表头部
+ * @note BLOCK不可以是链表第一个元素
  *
  * @param block
  * @return block_t*
@@ -550,7 +560,8 @@ static block_t *remove_before(block_t *block) {
   dbg_assert(check_free_block_aux(block) == true);
 
   block_t *removed = block->prev;
-  removed->prev->next = block;
+  if(removed->prev != NULL)
+    removed->prev->next = block;
   block->prev = removed->prev;
   return removed;
 }
@@ -558,7 +569,7 @@ static block_t *remove_before(block_t *block) {
 /**
  * @brief 将BLOCK之后的元素移出链表
  *
- * @note BLOCK不可以是链表尾部
+ * @note BLOCK不可以是链表最后一个元素
  *
  * @param block
  * @return block_t*
@@ -570,7 +581,8 @@ static block_t *remove_after(block_t *block) {
   dbg_assert(check_free_block_aux(block) == true);
 
   block_t *removed = block->next;
-  removed->next->prev = block;
+  if(removed->next != NULL)
+    removed->next->prev = block;
   block->next = removed->next;
   return removed;
 }
@@ -588,7 +600,7 @@ static bool valid_list_iterate(block_t *root, bool aux(block_t *),
   bool validation = false;
   const char *message = NULL;
   size_t list_count = 0;
-  for (block_t *curr = root; get_size(curr) != 0; curr = curr->next) {
+  for (block_t *curr = root; curr != NULL; curr = curr->next) {
     list_count++;
     validation = aux(curr);
     if (!validation) {
@@ -841,25 +853,25 @@ static block_t *coalesce_block(block_t *block) {
   if (adj_front_allocated) {
     if (adj_back_allocated) {
       // Case 1 两边都已分配
-      push_front(&heap_start, block);
+      push_front(&free_list_root, block);
     } else {
       // Case 2 右边已释放
       remove_block(adj_front);
       write_block(adj_front, get_size(adj_front) + get_size(block), false);
-      push_front(&heap_start ,adj_front);
+      push_front(&free_list_root ,adj_front);
     }
   } else {
     if (adj_back_allocated) {
     // Case 3 左边已释放
       remove_block(adj_back);
       write_block(block,  get_size(block) + get_size(adj_back), false);
-      push_front(&heap_start ,block);
+      push_front(&free_list_root ,block);
     } else {
     // Case 4 两边都已释放
       remove_block(adj_front);
       remove_block(adj_back);
       write_block(adj_front, get_size(adj_front) + get_size(block) + get_size(adj_back), false);
-      push_front(&heap_start ,adj_front);
+      push_front(&free_list_root ,adj_front);
     }
   }
   return block;
@@ -908,7 +920,10 @@ static block_t *extend_heap(size_t size) {
 
   // Create new epilogue header
   block_t *block_next = find_next(block);
-  write_epilogue(block_next, block);
+  write_epilogue(block_next);
+
+  // 更新链表头部为新Free Block
+  free_list_root = block; 
 
   return block;
 }
@@ -922,9 +937,12 @@ static block_t *extend_heap(size_t size) {
  * @param[in] block 待拆分的block
  * @param[in] asize BLOCK的目标新大小
  * @pre ASIZE < get_size(BLOCK)
+ * @pre asize对齐16 Byte
  */
 static void split_block(block_t *block, size_t asize) {
-  dbg_requires(get_alloc(block));
+  dbg_requires(get_alloc(block) == false);
+  dbg_requires(asize <= get_size(block));
+  dbg_requires(check_word_align_dword((word_t)asize));
   /* TODO: Can you write a precondition about the value of asize? */
 
   size_t block_size = get_size(block);
@@ -935,6 +953,9 @@ static void split_block(block_t *block, size_t asize) {
 
     block_next = find_next(block);
     write_block(block_next, block_size - asize, false);
+    push_front(&free_list_root, block_next);
+
+    dbg_ensures(block_next == free_list_root);
   }
 
   dbg_ensures(get_alloc(block));
@@ -951,8 +972,7 @@ static void split_block(block_t *block, size_t asize) {
 static block_t *find_fit(size_t asize) {
   block_t *block;
 
-  for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
-
+  for (block = free_list_root; get_size(block) > 0; block = block->next) {
     if (!(get_alloc(block)) && (asize <= get_size(block))) {
       return block;
     }
@@ -1041,7 +1061,7 @@ bool mm_checkheap(int line) {
   }
 
   // 检查epilogue block是否合法
-  valid = curr->next == NULL;
+  valid = check_tag(*find_prev_footer(curr), 0, true);
   if (!valid) {
     message = "epilogue Block invalid";
     goto done;
@@ -1075,7 +1095,7 @@ done:
  */
 bool mm_init(void) {
   // Create the initial empty heap
-  word_t *start = (word_t *)(mem_sbrk(4 * wsize));
+  word_t *start = (word_t *)(mem_sbrk(2 * wsize));
 
   if (start == (void *)-1) {
     return false;
@@ -1156,6 +1176,9 @@ void *malloc(size_t size) {
 
   // The block should be marked as free
   dbg_assert(!get_alloc(block));
+
+  // 将block从free list中移除
+  remove_block(block);
 
   // Mark block as allocated
   size_t block_size = get_size(block);
