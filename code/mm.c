@@ -96,7 +96,11 @@ static const size_t dsize = 2 * wsize;
  */
 static const size_t min_block_size = 4 * wsize + dsize;
 
-static const size_t overhead_size = 4 * wsize;
+/**
+ * @brief header + prev + next
+ *
+ */
+static const size_t overhead_size = 3 * wsize;
 
 /**
  * sbrk一次移动的最小长度，现在是4KB
@@ -1397,7 +1401,10 @@ void *malloc(size_t size) {
   }
 
   // Adjust block size to include overhead and to meet alignment requirements
-  asize = round_up(size + dsize, dsize);
+  asize = round_up(size + overhead_size, dsize);
+
+  // 至少为min_block_size
+  asize = max(min_block_size, asize);
 
   // Search the free list for a fit
   block = find_fit(asize);
@@ -1420,7 +1427,7 @@ void *malloc(size_t size) {
   remove_block(block);
   size_t block_size = get_size(block);
   write_block(block, block_size, true, get_front_alloc(block));
-  
+
   // Try to split the block if too large
   split_block(block, asize);
 
@@ -1484,6 +1491,7 @@ void free(void *bp) {
  * @return
  */
 void *realloc(void *ptr, size_t size) {
+  dbg_printf("\n=======\nrealloc\n=======\n");
   block_t *block = payload_to_header(ptr);
   size_t copysize;
   void *newptr;
@@ -1533,6 +1541,7 @@ void *realloc(void *ptr, size_t size) {
  * @return
  */
 void *calloc(size_t elements, size_t size) {
+  dbg_printf("\n=======\ncalloc\n=======\n");
   void *bp;
   size_t asize = elements * size;
 
