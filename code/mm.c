@@ -349,7 +349,8 @@ static bool extract_alloc(word_t word) { return (bool)(word & alloc_mask); }
  * @return The allocation status correpsonding to the word
  */
 static bool extract_front_alloc(word_t word) {
-  return (bool)(word & front_alloc_mask);
+  // 不等于0代表该Bit为1，前一个Block处于Alloc
+  return (bool)((word & front_alloc_mask) != 0);
 }
 
 /**
@@ -502,6 +503,26 @@ static block_t *find_prev(block_t *block) {
 
   word_t *footerp = find_prev_footer(block);
   return footer_to_header(footerp);
+}
+
+/**
+ * @brief 遍历堆中的所有block，直到AUX返回true为止
+ *
+ * @param block 目标BLOCK
+ * @param cmp 接收两个block_t*，前者是BLOCK，后者是每次迭代时变更的block
+ * @return block_t* cmp(block, curr)为true则返回curr，堆中无满足条件者返回NULL
+ */
+static block_t *find_by_cmp(block_t *block, bool cmp(block_t *, block_t *)) {
+  dbg_requires(block != NULL);
+  dbg_requires(get_size(block) != 0);
+
+  for (block_t *curr = heap_start; get_size(curr) != 0;
+       curr = find_next(curr)) {
+    if (cmp(block, curr) == true) {
+      return curr;
+    }
+  }
+  return NULL;
 }
 
 /**
@@ -704,6 +725,18 @@ static block_t *remove_after(block_t *block) {
 }
 
 /**
+ * @brief 比较CURR的后一个邻接的block是不是BLOCK
+ *
+ * @param block
+ * @param curr
+ * @return true
+ * @return false
+ */
+static bool cmp_back_is_block(block_t *block, block_t *curr) {
+  return find_next(curr) == block;
+}
+
+/**
  * @brief 遍历ROOT指向的链表，对其中所有元素调用AUX函数，执行失败即跳出循环。
  * 同时还会检查链表中的空置节点是否和堆中的空置节点数量相同
  *
@@ -879,7 +912,11 @@ static bool check_front_alloc_bit(block_t *block) {
     // 自己是堆中第一个数据块的话
     return ~(get_front_alloc(block) ^ true);
   } else {
-    return ~(get_front_alloc(block) ^ get_front_alloc(find_prev(block)));
+    bool block_state = get_front_alloc(block);
+    block_t *front_block = find_by_cmp(block, cmp_back_is_block);
+    dbg_assert(front_block != NULL);
+    bool prev_block = get_front_alloc(front_block);
+    return ~(block_state ^ prev_block);
   }
 }
 
