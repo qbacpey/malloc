@@ -1169,6 +1169,10 @@ static void split_block(block_t *block, size_t asize) {
 
   size_t block_size = get_size(block);
 
+  // BLOCK的后一个Block来说最后的front bit应该是？
+  bool result_front_bit = true;
+  block_t *result_last_block = block;
+
   if ((block_size - asize) >= min_block_size) {
     block_t *block_next;
     dbg_ensures(mm_checkheap(__LINE__));
@@ -1178,9 +1182,14 @@ static void split_block(block_t *block, size_t asize) {
     // 如果切分了Block，那么它之前的Block应该是未分配状态
     write_block(block_next, block_size - asize, false, true);
     push_front(&free_list_root, block_next);
+    // 它的前一个Block现在是free状态了
+    result_front_bit = false;
+    result_last_block = block_next;
 
     dbg_ensures(block_next == free_list_root);
   }
+  set_front_alloc_of_back_block(result_last_block, result_front_bit);
+
   dbg_ensures(mm_checkheap(__LINE__));
   dbg_ensures(get_alloc(block));
 }
@@ -1411,7 +1420,6 @@ void *malloc(size_t size) {
   remove_block(block);
   size_t block_size = get_size(block);
   write_block(block, block_size, true, get_front_alloc(block));
-  set_front_alloc_of_back_block(block, true);
   
   // Try to split the block if too large
   split_block(block, asize);
