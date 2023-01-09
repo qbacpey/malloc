@@ -224,6 +224,15 @@ static block_t *find_next(block_t *);
 static size_t max(size_t x, size_t y) { return (x > y) ? x : y; }
 
 /**
+ * @brief 将B的布尔值反转
+ *
+ * @param b
+ * @return true
+ * @return false
+ */
+static bool flip(bool b) { return b != true; }
+
+/**
  * @brief Rounds `size` up to next multiple of n
  * @param[in] size
  * @param[in] n
@@ -387,10 +396,10 @@ static void set_front_alloc(word_t *tag, bool front_alloc) {
  * @param block
  * @param front_alloc
  */
-static void set_block_next_front_alloc(block_t *block, bool front_alloc) {
-  // 只有在邻接的下一个Block未被分配的时候，才设置footer
+static void set_front_alloc_of_back_block(block_t *block, bool front_alloc) {
   block_t *next = find_next(block);
   set_front_alloc(&(next->header), front_alloc);
+  // 只有在邻接的下一个Block未被分配的时候，才设置footer
   if (!get_alloc(next)) {
     set_front_alloc(header_to_footer(next), front_alloc);
   }
@@ -431,6 +440,10 @@ static void write_epilogue(block_t *block, bool front_alloc) {
  * @pre size >= min_block_size
  * @pre size 对齐 16Byte
  *
+ * @note 大多数情况下此函数的调用语句之后都会跟随一个
+ * set_front_alloc_of_back_block函数调用
+ *
+ * @par
  * This function writes both a header and footer, where the location of the
  * footer is computed in relation to the header.
  *
@@ -455,7 +468,6 @@ static void write_block(block_t *block, size_t size, bool alloc,
     word_t *footerp = header_to_footer(block);
     *footerp = pack(size, alloc, front_alloc);
   }
-  set_block_next_front_alloc(block, alloc);
 }
 
 /**
@@ -910,13 +922,13 @@ done:
 static bool check_front_alloc_bit(block_t *block) {
   if (block == heap_start) {
     // 自己是堆中第一个数据块的话
-    return ~(get_front_alloc(block) ^ true);
+    return flip(get_front_alloc(block) ^ true);
   } else {
-    bool block_state = get_front_alloc(block);
+    // 如果前一个Block已分配的话，由于Footer不合法，因此只能迭代获取
     block_t *front_block = find_by_cmp(block, cmp_back_is_block);
     dbg_assert(front_block != NULL);
-    bool prev_block = get_front_alloc(front_block);
-    return ~(block_state ^ prev_block);
+    bool front_block_alloc = get_front_alloc(front_block);
+    return flip(get_front_alloc(block) ^ front_block_alloc);
   }
 }
 
@@ -1044,6 +1056,7 @@ static block_t *coalesce_block(block_t *block) {
   dbg_assert(get_size(block) != 0);
 
   // 获取堆中前后邻接的Block
+  block_t *result = block;
   block_t *adj_back = find_next(block);
   bool adj_front_allocated = get_front_alloc(block);
   bool adj_back_allocated = get_alloc(adj_back);
@@ -1052,12 +1065,10 @@ static block_t *coalesce_block(block_t *block) {
   if (adj_front_allocated) {
     if (adj_back_allocated) {
       // Case 1 两边都已分配
-      return block;
     } else {
-      // Case 2 后边已释放
+      // Case 2 后边已释放 上述两种情况都不需要改变result
       remove_block(adj_back);
       write_block(block, get_size(block) + get_size(adj_back), false, true);
-      return block;
     }
   } else {
     block_t *adj_front = find_prev(block);
@@ -1066,7 +1077,7 @@ static block_t *coalesce_block(block_t *block) {
       remove_block(adj_front);
       write_block(adj_front, get_size(adj_front) + get_size(block), false,
                   true);
-      return adj_front;
+      result = adj_front;
     } else {
       // Case 4 两边都已释放
       remove_block(adj_front);
@@ -1074,9 +1085,11 @@ static block_t *coalesce_block(block_t *block) {
       write_block(adj_front,
                   get_size(adj_front) + get_size(block) + get_size(adj_back),
                   false, true);
-      return adj_front;
+      result = adj_front;
     }
   }
+  set_front_alloc_of_back_block(result, false);
+  return result;
 }
 
 /**
@@ -1120,6 +1133,7 @@ static block_t *extend_heap(size_t size) {
   // Initialize free block header/footer
   block_t *block = payload_to_header(bp);
   write_block(block, size, false, front_alloc_bit);
+  set_front_alloc_of_back_block(block, false);
 
   // Create new epilogue header 需要先把epilguos写入
   block_t *block_next = find_next(block);
@@ -1157,6 +1171,7 @@ static void split_block(block_t *block, size_t asize) {
 
   if ((block_size - asize) >= min_block_size) {
     block_t *block_next;
+    dbg_ensures(mm_checkheap(__LINE__));
     write_block(block, asize, true, get_front_alloc(block));
 
     block_next = find_next(block);
@@ -1166,6 +1181,7 @@ static void split_block(block_t *block, size_t asize) {
 
     dbg_ensures(block_next == free_list_root);
   }
+  dbg_ensures(mm_checkheap(__LINE__));
   dbg_ensures(get_alloc(block));
 }
 
@@ -1395,7 +1411,8 @@ void *malloc(size_t size) {
   remove_block(block);
   size_t block_size = get_size(block);
   write_block(block, block_size, true, get_front_alloc(block));
-
+  set_front_alloc_of_back_block(block, true);
+  
   // Try to split the block if too large
   split_block(block, asize);
 
@@ -1435,6 +1452,7 @@ void free(void *bp) {
 
   // Mark the block as free
   write_block(block, size, false, get_front_alloc(block));
+  set_front_alloc_of_back_block(block, false);
 
   // Try to coalesce the block with its neighbors
   block = coalesce_block(block);
