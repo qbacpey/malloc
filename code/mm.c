@@ -1357,6 +1357,8 @@ bool mm_init(void) {
 
   // Heap starts with first "block header", currently the epilogue
   heap_start = (block_t *)&(start[1]);
+  // 需要显式初始化一下
+  free_list_root = NULL;
 
   block_t *first_block = NULL;
 
@@ -1491,7 +1493,6 @@ void free(void *bp) {
  * @return
  */
 void *realloc(void *ptr, size_t size) {
-  dbg_printf("\n=======\nrealloc\n=======\n");
   block_t *block = payload_to_header(ptr);
   size_t copysize;
   void *newptr;
@@ -1541,7 +1542,6 @@ void *realloc(void *ptr, size_t size) {
  * @return
  */
 void *calloc(size_t elements, size_t size) {
-  dbg_printf("\n=======\ncalloc\n=======\n");
   void *bp;
   size_t asize = elements * size;
 

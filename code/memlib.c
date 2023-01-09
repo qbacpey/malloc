@@ -212,7 +212,7 @@ void *mem_sbrk(intptr_t incr)
         ok = false;
         fprintf(
             stderr,
-            "ERROR: mem_sbrk failed.  Could not allocate more heap space\n");
+            "ERROR: mem_sbrk failed.  Could not allocate more heap space ( incr: %ld, sparse: %s )\n", incr, sparse == true ? "true" : "false");
     }
 
     if (ok)
