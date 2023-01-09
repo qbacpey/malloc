@@ -211,6 +211,7 @@ static block_t *free_list_root = NULL;
 static bool check_free_block_aux(block_t *);
 static bool valid_block_format(block_t *);
 static bool check_word_align_dword(word_t);
+static block_t *find_next(block_t *);
 
 /* Declaration end */
 
@@ -295,12 +296,12 @@ static void *header_to_payload(block_t *block) {
 
 /**
  * @brief Given a block pointer, returns a pointer to the corresponding
- *        footer.
+ *        footer. Block的倒数第一个Word
  * @param[in] block
  * @return A pointer to the block's footer
  */
 static word_t *header_to_footer(block_t *block) {
-  return (word_t *)(block->payload + get_size(block) - 3 * wsize);
+  return (word_t *)(block->payload + get_size(block) - 4 * wsize);
 }
 
 /**
@@ -388,10 +389,25 @@ static void set_front_alloc(word_t *tag, bool front_alloc) {
 static void set_block_next_front_alloc(block_t *block, bool front_alloc) {
   // 只有在邻接的下一个Block未被分配的时候，才设置footer
   block_t *next = find_next(block);
-  set_front_alloc(next->header, front_alloc);
+  set_front_alloc(&(next->header), front_alloc);
   if (!get_alloc(next)) {
     set_front_alloc(header_to_footer(next), front_alloc);
   }
+}
+
+/**
+ * @brief 打印BLOCK中的各项数据
+ *
+ * @param block
+ */
+static void dbg_print_block(block_t *block) {
+  dbg_printf("\nBlock address:\t\t %p\n", block);
+  dbg_printf("Block header:\t\t 0x%09lx\n", block->header);
+  dbg_printf("Block footer:\t\t 0x%09lx\n", *header_to_footer(block));
+  dbg_printf("Block Size:\t\t %ld\n", get_size(block));
+  printf("Block alloc:\t\t %s\n", get_alloc(block) == true ? "true" : "false");
+  printf("Block front alloc:\t %s\n",
+         get_front_alloc(block) == true ? "true" : "false");
 }
 
 /**
@@ -417,6 +433,8 @@ static void write_epilogue(block_t *block, bool front_alloc) {
  * This function writes both a header and footer, where the location of the
  * footer is computed in relation to the header.
  *
+ * 有一个重要事实是，如果是分配Block的话，footer会被覆盖掉
+ *
  * TODO: Are there any preconditions or postconditions?
  *
  * @param[out] block The location to begin writing the block header
@@ -431,8 +449,11 @@ static void write_block(block_t *block, size_t size, bool alloc,
   dbg_requires(check_word_align_dword((word_t)size));
 
   block->header = pack(size, alloc, front_alloc);
-  word_t *footerp = header_to_footer(block);
-  *footerp = pack(size, alloc, front_alloc);
+  // 只有Free block才有footer
+  if (!alloc) {
+    word_t *footerp = header_to_footer(block);
+    *footerp = pack(size, alloc, front_alloc);
+  }
   set_block_next_front_alloc(block, alloc);
 }
 
@@ -580,8 +601,7 @@ static void insert_before(block_t *curr, block_t *back) {
  */
 static void push_front(block_t **root, block_t *new_head) {
   dbg_assert(root != NULL);
-  dbg_assert(*root != NULL);
-  dbg_assert(check_free_block_aux(*root) == true);
+
   dbg_assert(new_head != NULL);
   dbg_assert(get_size(new_head) != 0);
   dbg_assert(get_alloc(new_head) == false);
@@ -589,7 +609,10 @@ static void push_front(block_t **root, block_t *new_head) {
 
   new_head->next = *root;
   new_head->prev = NULL;
-  (*root)->prev = new_head;
+  if (*root != NULL) {
+    dbg_assert(check_free_block_aux(*root) == true);
+    (*root)->prev = new_head;
+  }
   *root = new_head;
 }
 
@@ -632,6 +655,9 @@ static void remove_block(block_t *block) {
   }
   if (block->prev != NULL) {
     block->prev->next = block->next;
+  } else {
+    // TODO 可能是头节点，需要修改ROOT指针，需要优化实现
+    free_list_root = block->next;
   }
 }
 
@@ -698,7 +724,8 @@ static bool valid_list_iterate(block_t *root, bool aux(block_t *),
     }
   }
 
-  if (list_count != heap_count) {
+  validation = list_count == heap_count;
+  if (!validation) {
     dbg_printf("\n=============\n%d: List count not match with Heap "
                "count\n=============\n",
                __LINE__);
@@ -757,20 +784,23 @@ static bool valid_block_align(block_t *block) {
 
   validation = check_word_align_dword((word_t)block->payload);
   if (!validation) {
-    dbg_printf("\n=============\n%d: payload not alignment\n=============\n",
-               __LINE__);
+    dbg_printf("\n=============\n%d: payload not alignment\n", __LINE__);
     goto done;
   }
 
   // 检查footer是不是对齐16Byte
-  validation = check_word_align_dword(*header_to_footer(block));
+  validation = check_word_align_dword((word_t)header_to_footer(block));
   if (!validation) {
     dbg_printf("\n=============\n%d: block footer not align to 16 "
-               "Byte\n=============\n",
+               "Byte\n",
                __LINE__);
     goto done;
   }
 done:
+  if (!validation) {
+    dbg_print_block(block);
+    dbg_printf("=============\n");
+  }
   return validation;
 }
 
@@ -809,27 +839,48 @@ static bool valid_block_format(block_t *block) {
   validation = check_block_size(block);
   if (!validation) {
     dbg_printf("\n=============\n%d: block smaller than "
-               "min_block_size\n=============\n",
+               "min_block_size\n",
                __LINE__);
     goto done;
   }
 
-  validation = check_tags_match(block);
-  if (!validation) {
-    dbg_printf(
-        "\n=============\n%d: block header & footer not match\n=============\n",
-        __LINE__);
-    goto done;
+  // 只检查Free block
+  if (!get_alloc(block)) {
+    validation = check_tags_match(block);
+    if (!validation) {
+      dbg_printf("\n=============\n%d: block header & footer not match\n",
+                 __LINE__);
+      goto done;
+    }
   }
 
   validation = valid_block_align(block);
   if (!validation) {
-    dbg_printf("\n=============\n%d: block not align\n=============\n",
-               __LINE__);
+    dbg_printf("\n=============\n%d: block not align\n", __LINE__);
     goto done;
   }
 done:
+  if (!validation) {
+    dbg_print_block(block);
+    dbg_printf("=============\n");
+  }
   return validation;
+}
+
+/**
+ * @brief 检查自己的front bit是否和前一个Block的alloc bit相互匹配
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool check_front_alloc_bit(block_t *block) {
+  if (block == heap_start) {
+    // 自己是堆中第一个数据块的话
+    return ~(get_front_alloc(block) ^ true);
+  } else {
+    return ~(get_front_alloc(block) ^ get_front_alloc(find_prev(block)));
+  }
 }
 
 /**
@@ -882,15 +933,14 @@ static bool valid_node(block_t *block) {
   // 检查next以及prev指针
   validation = check_node_addr(block);
   if (!validation) {
-    dbg_printf("\n=============\n%d: prev or next invalid\n=============\n",
-               __LINE__);
+    dbg_printf("\n=============\n%d: prev or next invalid", __LINE__);
     goto done;
   }
 
   validation = check_match_with_front(block);
   if (!validation) {
     dbg_printf("\n=============\n%d: next block's prev don't point to this "
-               "block\n=============\n",
+               "block\n",
                __LINE__);
     goto done;
   }
@@ -898,11 +948,16 @@ static bool valid_node(block_t *block) {
   validation = check_match_with_back(block);
   if (!validation) {
     dbg_printf("\n=============\n%d: prev block's next don't point to this "
-               "block\n=============\n",
+               "block\n",
                __LINE__);
     goto done;
   }
 done:
+  if (!validation) {
+    dbg_print_block(block);
+    dbg_printf("=============\n");
+  }
+
   return validation;
 }
 
@@ -960,12 +1015,12 @@ static block_t *coalesce_block(block_t *block) {
   if (adj_front_allocated) {
     if (adj_back_allocated) {
       // Case 1 两边都已分配
-      push_front(&free_list_root, block);
+      return block;
     } else {
       // Case 2 后边已释放
       remove_block(adj_back);
       write_block(block, get_size(block) + get_size(adj_back), false, true);
-      push_front(&free_list_root, block);
+      return block;
     }
   } else {
     block_t *adj_front = find_prev(block);
@@ -974,7 +1029,7 @@ static block_t *coalesce_block(block_t *block) {
       remove_block(adj_front);
       write_block(adj_front, get_size(adj_front) + get_size(block), false,
                   true);
-      push_front(&free_list_root, adj_front);
+      return adj_front;
     } else {
       // Case 4 两边都已释放
       remove_block(adj_front);
@@ -982,10 +1037,9 @@ static block_t *coalesce_block(block_t *block) {
       write_block(adj_front,
                   get_size(adj_front) + get_size(block) + get_size(adj_back),
                   false, true);
-      push_front(&free_list_root, adj_front);
+      return adj_front;
     }
   }
-  return block;
 }
 
 /**
@@ -1038,8 +1092,9 @@ static block_t *extend_heap(size_t size) {
   block = coalesce_block(block);
 
   // 更新链表头部为新Free Block
-  free_list_root = block;
+  push_front(&free_list_root, block);
 
+  dbg_ensures(valid_node(block));
   return block;
 }
 
@@ -1088,7 +1143,7 @@ static void split_block(block_t *block, size_t asize) {
 static block_t *find_fit(size_t asize) {
   block_t *block;
 
-  for (block = free_list_root; get_size(block) > 0; block = block->next) {
+  for (block = free_list_root; block != NULL; block = block->next) {
     if (!(get_alloc(block)) && (asize <= get_size(block))) {
       return block;
     }
@@ -1154,9 +1209,7 @@ bool mm_checkheap(int line) {
   // 检查prologue block格式
   valid = check_tag(*find_prev_footer(heap_start), 0, true);
   if (!valid) {
-    dbg_printf(
-        "\n=============\n%d: prologue block format error!\n=============\n",
-        __LINE__);
+    dbg_printf("\n=============\n%d: prologue block format error!", __LINE__);
     goto done;
   }
 
@@ -1168,7 +1221,13 @@ bool mm_checkheap(int line) {
   for (curr = heap_start; get_size(curr) != 0; curr = find_next(curr)) {
     valid = valid_block_format(curr);
     if (!valid) {
-      dbg_printf("\n=============\n%d: Block invalid\n=============\n",
+      dbg_printf("\n=============\n%d: Block format invalid", __LINE__);
+      goto done;
+    }
+    valid = check_front_alloc_bit(curr);
+    if (!valid) {
+      dbg_printf("\n=============\n%d: Block alloc bit not match with front "
+                 "block",
                  __LINE__);
       goto done;
     }
@@ -1179,20 +1238,22 @@ bool mm_checkheap(int line) {
   }
 
   // 检查epilogue block是否合法
-  valid = check_tag(*find_prev_footer(curr), 0, true);
+  valid = check_tag(curr->header, 0, true);
   if (!valid) {
-    dbg_printf("\n=============\n%d: epilogue Block invalid\n=============\n",
-               __LINE__);
+    dbg_printf("\n=============\n%d: epilogue Block invalid", __LINE__);
     goto done;
   }
 
   // 遍历链表中的所有节点，检查它们是否合法
   valid = valid_list_iterate(free_list_root, valid_node, count);
   if (!valid) {
-    dbg_printf("\n=============\n%d: List invalid\n=============\n", __LINE__);
+    dbg_printf("\n=============\n%d: List invalid", __LINE__);
     goto done;
   }
 done:
+  if (!valid)
+    dbg_printf("\n=============\n");
+
   return valid;
 }
 
@@ -1293,10 +1354,8 @@ void *malloc(size_t size) {
   // The block should be marked as free
   dbg_assert(!get_alloc(block));
 
-  // 将block从free list中移除
-  remove_block(block);
-
   // Mark block as allocated
+  remove_block(block);
   size_t block_size = get_size(block);
   write_block(block, block_size, true, get_front_alloc(block));
 
@@ -1342,6 +1401,9 @@ void free(void *bp) {
 
   // Try to coalesce the block with its neighbors
   block = coalesce_block(block);
+
+  // 将新Free block插入到合适的链表中
+  push_front(&free_list_root, block);
 
   dbg_ensures(mm_checkheap(__LINE__));
 }
