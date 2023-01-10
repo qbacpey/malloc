@@ -135,12 +135,6 @@ typedef struct block {
   /** @brief Header contains size + allocation flag */
   word_t header;
 
-  /** @brief 指向free list中前一个block的指针 */
-  struct block *prev;
-
-  /** @brief 指向free list中后一个block的指针 */
-  struct block *next;
-
   /**
    * @brief A pointer to the block payload.
    *
@@ -148,7 +142,7 @@ typedef struct block {
    * it as a zero-length array, which is a GCC compiler extension. This will
    * allow us to obtain a pointer to the start of the payload.
    *
-   * 可以通过get_payload(block)获取payload的地址
+   * 可以通过get_body(block)获取payload的地址
    *
    * WARNING: A zero-length array must be the last element in a struct, so
    * there should not be any struct fields after it. For this lab, we will
@@ -166,7 +160,16 @@ typedef struct block {
    * 不要使用强制类型转换将此字段变为其他类型，最好使用一个Union将其包裹起来
    * 不过Union中的其他成员可以是结构体，可以使用它们来保存一些其他的数据
    */
-  char payload[0];
+  union body {
+    struct list_elem {
+      /** @brief 指向free list中前一个block的指针 */
+      struct block *prev;
+
+      /** @brief 指向free list中后一个block的指针 */
+      struct block *next;
+    } list_elem;
+    char payload[0];
+  } body;
 
   /*
    * TODO: delete or replace this comment once you've thought about it.
@@ -293,7 +296,7 @@ static size_t get_size(block_t *block) { return extract_size(block->header); }
  * @param block
  * @return void*
  */
-static void *get_payload(block_t *block) { return block->payload; }
+static void *get_body(block_t *block) { return (void *)&(block->body); }
 
 /**
  * @brief Given a payload pointer, returns a pointer to the corresponding
@@ -302,7 +305,7 @@ static void *get_payload(block_t *block) { return block->payload; }
  * @return The corresponding block
  */
 static block_t *payload_to_header(void *bp) {
-  return (block_t *)((char *)bp - offsetof(block_t, payload));
+  return (block_t *)((char *)bp - offsetof(block_t, body));
 }
 
 /**
@@ -311,7 +314,7 @@ static block_t *payload_to_header(void *bp) {
  * @param[in] block
  * @return A pointer to the block's payload
  */
-static void *header_to_payload(block_t *block) { return get_payload(block); }
+static void *header_to_payload(block_t *block) { return get_body(block); }
 
 /**
  * @brief Given a block pointer, returns a pointer to the corresponding
@@ -320,7 +323,7 @@ static void *header_to_payload(block_t *block) { return get_payload(block); }
  * @return A pointer to the block's footer
  */
 static word_t *header_to_footer(block_t *block) {
-  return (word_t *)(get_payload(block) + get_size(block) - 4 * wsize);
+  return (word_t *)((void *)block + get_size(block) - overhead_size);
 }
 
 /**
@@ -343,7 +346,7 @@ static block_t *footer_to_header(word_t *footer) {
  * @param[in] block
  * @return The size of the block's payload
  */
-static size_t get_payload_size(block_t *block) {
+static size_t get_body_size(block_t *block) {
   size_t asize = get_size(block);
   return asize - overhead_size;
 }
@@ -436,11 +439,11 @@ static void dbg_print_block(block_t *block) {
  * The epilogue header has size 0, and is marked as allocated.
  *
  * @param[out] block The location to write the epilogue header
- * @pre block == mem_heap_hi() - 7 - dsize
+ * @pre block == mem_heap_hi() - 7
  */
 static void write_epilogue(block_t *block, bool front_alloc) {
   dbg_requires(block != NULL);
-  dbg_requires((char *)block == mem_heap_hi() - 7 - dsize);
+  dbg_requires((char *)block == mem_heap_hi() - 7);
 
   block->header = pack(0, true, front_alloc);
 }
@@ -556,7 +559,7 @@ static block_t *find_by_cmp(block_t *block, bool cmp(block_t *, block_t *)) {
 static block_t *get_prev(block_t *this) {
   dbg_assert(!get_alloc(this));
 
-  return this->prev;
+  return this->body.list_elem.prev;
 }
 
 /**
@@ -567,7 +570,7 @@ static block_t *get_prev(block_t *this) {
  */
 static void set_prev(block_t *this, block_t *block) {
   dbg_assert(!get_alloc(this));
-  this->prev = block;
+  this->body.list_elem.prev = block;
 }
 
 /**
@@ -578,7 +581,7 @@ static void set_prev(block_t *this, block_t *block) {
  */
 static block_t *get_next(block_t *this) {
   dbg_assert(!get_alloc(this));
-  return this->next;
+  return this->body.list_elem.next;
 }
 
 /**
@@ -589,7 +592,7 @@ static block_t *get_next(block_t *this) {
  */
 static void set_next(block_t *this, block_t *block) {
   dbg_assert(!get_alloc(this));
-  this->next = block;
+  this->body.list_elem.next = block;
 }
 
 /**
@@ -848,7 +851,7 @@ static bool check_word_align_dword(word_t word) {
 static bool valid_block_align(block_t *block) {
   bool validation = false;
 
-  validation = check_word_align_dword((word_t)get_payload(block));
+  validation = check_word_align_dword((word_t)get_body(block));
   if (!validation) {
     dbg_printf("\n=============\n%d: payload not alignment\n", __LINE__);
     goto done;
@@ -1150,7 +1153,7 @@ static block_t *extend_heap(size_t size) {
    */
 
   // 首先需要将epilogue block的front_alloc_bit保存起来
-  word_t old_epilogue = *(word_t *)(bp - 3 * wsize);
+  word_t old_epilogue = *(word_t *)(bp - wsize);
   bool front_alloc_bit = extract_front_alloc(old_epilogue);
 
   // Initialize free block header/footer
@@ -1348,16 +1351,14 @@ done:
  * @par 初始状况下的堆长度为64Byte (4 DWord) + chunksize：
  * - DWord1：prologue block的footer；
  * - DWord2：epilogue block的header；
- * - DWord3：epilogue block的prev；
- * - DWord4：epilogue block的next；
  * - chunksize：堆初始的空余空间，可被直接使用；
  * 它们的“size”字段都为0，用于标识
  *
  * @return
  */
 bool mm_init(void) {
-  // Create the initial empty heap（还有两个word是对齐）
-  word_t *start = (word_t *)(mem_sbrk(4 * wsize));
+  // Create the initial empty heap
+  word_t *start = (word_t *)(mem_sbrk(2 * wsize));
 
   if (start == (void *)-1) {
     return false;
@@ -1536,7 +1537,7 @@ void *realloc(void *ptr, size_t size) {
   }
 
   // Copy the old data
-  copysize = get_payload_size(block); // gets size of old payload
+  copysize = get_body_size(block); // gets size of old payload
   if (size < copysize) {
     copysize = size;
   }
