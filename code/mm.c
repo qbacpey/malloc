@@ -94,13 +94,13 @@ static const size_t dsize = 2 * wsize;
  * header + prev pointer + next pointer + footer
  * 不允许Payload为0
  */
-static const size_t min_block_size = 4 * wsize + dsize;
+static const size_t min_block_size = 4 * wsize;
 
 /**
- * @brief header + prev + next
+ * @brief header
  *
  */
-static const size_t overhead_size = 3 * wsize;
+static const size_t overhead_size = wsize;
 
 /**
  * sbrk一次移动的最小长度，现在是4KB
@@ -148,7 +148,7 @@ typedef struct block {
    * it as a zero-length array, which is a GCC compiler extension. This will
    * allow us to obtain a pointer to the start of the payload.
    *
-   * 可以通过block->payload获取payload的地址
+   * 可以通过get_payload(block)获取payload的地址
    *
    * WARNING: A zero-length array must be the last element in a struct, so
    * there should not be any struct fields after it. For this lab, we will
@@ -288,6 +288,14 @@ static size_t extract_size(word_t word) { return (word & size_mask); }
 static size_t get_size(block_t *block) { return extract_size(block->header); }
 
 /**
+ * @brief Get the payload object
+ *
+ * @param block
+ * @return void*
+ */
+static void *get_payload(block_t *block) { return block->payload; }
+
+/**
  * @brief Given a payload pointer, returns a pointer to the corresponding
  *        block.
  * @param[in] bp A pointer to a block's payload
@@ -303,9 +311,7 @@ static block_t *payload_to_header(void *bp) {
  * @param[in] block
  * @return A pointer to the block's payload
  */
-static void *header_to_payload(block_t *block) {
-  return (void *)(block->payload);
-}
+static void *header_to_payload(block_t *block) { return get_payload(block); }
 
 /**
  * @brief Given a block pointer, returns a pointer to the corresponding
@@ -314,7 +320,7 @@ static void *header_to_payload(block_t *block) {
  * @return A pointer to the block's footer
  */
 static word_t *header_to_footer(block_t *block) {
-  return (word_t *)(block->payload + get_size(block) - 4 * wsize);
+  return (word_t *)(get_payload(block) + get_size(block) - 4 * wsize);
 }
 
 /**
@@ -842,7 +848,7 @@ static bool check_word_align_dword(word_t word) {
 static bool valid_block_align(block_t *block) {
   bool validation = false;
 
-  validation = check_word_align_dword((word_t)block->payload);
+  validation = check_word_align_dword((word_t)get_payload(block));
   if (!validation) {
     dbg_printf("\n=============\n%d: payload not alignment\n", __LINE__);
     goto done;
