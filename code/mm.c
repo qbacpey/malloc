@@ -542,38 +542,49 @@ static block_t *find_by_cmp(block_t *block, bool cmp(block_t *, block_t *)) {
 }
 
 /**
- * @brief Get the prev of THIS
+ * @brief Get the prev pointer of THIS
  *
  * @param this
  * @return block_t*
  */
-static block_t *get_prev(block_t *this);
+static block_t *get_prev(block_t *this) {
+  dbg_assert(!get_alloc(this));
+
+  return this->prev;
+}
 
 /**
- * @brief Set the prev of THIS to BLOCK
+ * @brief Set the prev pointer of THIS to BLOCK
  *
  * @param this
  * @param block
- * @return block_t*
  */
-static block_t *set_prev(block_t *this, block_t *block);
+static void set_prev(block_t *this, block_t *block) {
+  dbg_assert(!get_alloc(this));
+  this->prev = block;
+}
 
 /**
- * @brief Get the next of THIS
+ * @brief Get the next pointer of THIS
  *
  * @param this
  * @return block_t*
  */
-static block_t *get_next(block_t *this);
+static block_t *get_next(block_t *this) {
+  dbg_assert(!get_alloc(this));
+  return this->next;
+}
 
 /**
- * @brief Set the next of THIS to BLOCK
+ * @brief Set the next pointer of THIS to BLOCK
  *
  * @param this
  * @param block
- * @return block_t*
  */
-static block_t *set_next(block_t *this, block_t *block);
+static void set_next(block_t *this, block_t *block) {
+  dbg_assert(!get_alloc(this));
+  this->next = block;
+}
 
 /**
  * @brief 将CURR插入到FRONT之后
@@ -595,11 +606,11 @@ static void insert_after(block_t *front, block_t *curr) {
   dbg_assert(get_alloc(curr) == false);
   dbg_assert(valid_block_format(curr) == true);
 
-  curr->next = front->next;
-  curr->prev = front;
-  front->next = curr;
-  if (curr->next != NULL)
-    curr->next->prev = curr;
+  set_next(curr, get_next(front));  // curr->next = front->next;
+  set_prev(curr, front);            // curr->prev = front;
+  set_next(front, curr);            // front->next = curr;
+  if (get_next(curr) != NULL)       // if (curr->next != NULL)
+    set_prev(get_next(curr), curr); // curr->next->prev = curr;
 }
 
 /**
@@ -622,11 +633,11 @@ static void insert_before(block_t *curr, block_t *back) {
   dbg_assert(get_alloc(curr) == false);
   dbg_assert(valid_block_format(curr) == true);
 
-  curr->prev = back->prev;
-  curr->next = back;
-  back->prev = curr;
-  if (curr->prev != NULL)
-    curr->prev->next = curr;
+  set_prev(curr, get_prev(back));   // curr->prev = back->prev;
+  set_next(curr, back);             // curr->next = back;
+  set_prev(back, curr);             // back->prev = curr;
+  if (get_prev(curr) != NULL)       // if (curr->prev != NULL)
+    set_next(get_prev(curr), curr); //   curr->prev->next = curr;
 }
 
 /**
@@ -644,11 +655,11 @@ static void push_front(block_t **root, block_t *new_head) {
   dbg_assert(get_alloc(new_head) == false);
   dbg_assert(valid_block_format(new_head) == true);
 
-  new_head->next = *root;
-  new_head->prev = NULL;
+  set_next(new_head, *root); // new_head->next = *root;
+  set_prev(new_head, NULL);  // new_head->prev = NULL;
   if (*root != NULL) {
     dbg_assert(check_free_block_aux(*root) == true);
-    (*root)->prev = new_head;
+    set_prev(*root, new_head); // (*root)->prev = new_head;
   }
   *root = new_head;
 }
@@ -666,8 +677,8 @@ static block_t *pop_front(block_t **root) {
   dbg_assert(check_free_block_aux(*root) == true);
 
   block_t *old_head = *root;
-  old_head->next->prev = NULL;
-  (*root) = old_head->next;
+  set_prev(get_next(old_head), NULL); // old_head->next->prev = NULL;
+  *root = get_next(old_head);         // (*root) = old_head->next;
   return old_head;
 }
 
@@ -687,14 +698,14 @@ static void remove_block(block_t *block) {
   dbg_assert(check_free_block_aux(block) == true);
 
   // TODO 如果是升级为segregate list的话，那么这里的实现需要修改
-  if (block->next != NULL) {
-    block->next->prev = block->prev;
+  if (get_next(block) != NULL) {
+    set_prev(get_next(block), get_prev(block));
   }
-  if (block->prev != NULL) {
-    block->prev->next = block->next;
+  if (get_prev(block) != NULL) {
+    set_next(get_prev(block), get_next(block));
   } else {
     // TODO 可能是头节点，需要修改ROOT指针，需要优化实现
-    free_list_root = block->next;
+    free_list_root = get_next(block);
   }
 }
 
@@ -712,10 +723,10 @@ static block_t *remove_before(block_t *block) {
   dbg_assert(get_alloc(block) == false);
   dbg_assert(check_free_block_aux(block) == true);
 
-  block_t *removed = block->prev;
-  if (removed->prev != NULL)
-    removed->prev->next = block;
-  block->prev = removed->prev;
+  block_t *removed = get_prev(block);
+  if (get_prev(removed) != NULL)
+    set_next(get_prev(removed), block);
+  set_prev(block, get_prev(removed));
   return removed;
 }
 
@@ -733,10 +744,10 @@ static block_t *remove_after(block_t *block) {
   dbg_assert(get_alloc(block) == false);
   dbg_assert(check_free_block_aux(block) == true);
 
-  block_t *removed = block->next;
-  if (removed->next != NULL)
-    removed->next->prev = block;
-  block->next = removed->next;
+  block_t *removed = get_next(block);
+  if (get_next(removed) != NULL)
+    set_prev(get_next(removed), block);
+  set_next(block, get_next(removed));
   return removed;
 }
 
@@ -764,7 +775,7 @@ static bool valid_list_iterate(block_t *root, bool aux(block_t *),
                                size_t heap_count) {
   bool validation = false;
   size_t list_count = 0;
-  for (block_t *curr = root; curr != NULL; curr = curr->next) {
+  for (block_t *curr = root; curr != NULL; curr = get_next(curr)) {
     list_count++;
     validation = aux(curr);
     if (!validation) {
@@ -945,7 +956,7 @@ static bool check_front_alloc_bit(block_t *block) {
  * @return false
  */
 static bool check_match_with_front(block_t *block) {
-  return block->next != NULL ? block == block->next->prev : true;
+  return get_next(block) != NULL ? block == get_prev(get_next(block)) : true;
 }
 
 /**
@@ -957,7 +968,7 @@ static bool check_match_with_front(block_t *block) {
  * @return false
  */
 static bool check_match_with_back(block_t *block) {
-  return block->prev != NULL ? block == block->prev->next : true;
+  return get_prev(block) != NULL ? block == get_next(get_prev(block)) : true;
 }
 
 /**
@@ -969,8 +980,10 @@ static bool check_match_with_back(block_t *block) {
  * @return false
  */
 static bool check_node_addr(block_t *block) {
-  return (check_address_in_heap((word_t)block->next) || block->next == NULL) &&
-         (check_address_in_heap((word_t)block->prev) || block->prev == NULL);
+  return (check_address_in_heap((word_t)get_next(block)) ||
+          get_next(block) == NULL) &&
+         (check_address_in_heap((word_t)get_prev(block)) ||
+          get_prev(block) == NULL);
 }
 
 /**
@@ -1209,7 +1222,7 @@ static void split_block(block_t *block, size_t asize) {
 static block_t *find_fit(size_t asize) {
   block_t *block;
 
-  for (block = free_list_root; block != NULL; block = block->next) {
+  for (block = free_list_root; block != NULL; block = get_next(block)) {
     if (!(get_alloc(block)) && (asize <= get_size(block))) {
       return block;
     }
