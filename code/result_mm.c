@@ -778,7 +778,7 @@ static void split_block(block_t *block, size_t asize) {
  * @param[in] asize
  * @return
  */
-static block_t *find_fit(size_t asize) {
+static block_t *find_first_fit(size_t asize) {
   // block_t *block;
 
   // for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
@@ -1171,7 +1171,7 @@ void *malloc(size_t size) {
   // }
 
   // Search the free list for a fit
-  block = find_fit(asize);
+  block = find_first_fit(asize);
 
   // If no fit is found, request more memory, and then and place the block
   if (block == NULL) {

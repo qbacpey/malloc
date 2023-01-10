@@ -219,7 +219,8 @@ static bool check_free_block_aux(block_t *);
 static bool valid_block_format(block_t *);
 static bool check_word_align_dword(word_t);
 static block_t *find_next(block_t *);
-
+static block_t *find_heap_by_cmp(block_t *, bool cmp(block_t *, block_t *));
+static block_t *find_list_by_cmp(block_t *, bool cmp(block_t *, block_t *));
 /* Declaration end */
 
 /**
@@ -537,7 +538,8 @@ static block_t *find_prev(block_t *block) {
  * @param cmp 接收两个block_t*，前者是BLOCK，后者是每次迭代时变更的block
  * @return block_t* cmp(block, curr)为true则返回curr，堆中无满足条件者返回NULL
  */
-static block_t *find_by_cmp(block_t *block, bool cmp(block_t *, block_t *)) {
+static block_t *find_heap_by_cmp(block_t *block,
+                                 bool cmp(block_t *, block_t *)) {
   dbg_requires(block != NULL);
   dbg_requires(get_size(block) != 0);
 
@@ -949,7 +951,7 @@ static bool check_front_alloc_bit(block_t *block) {
     return flip(get_front_alloc(block) ^ true);
   } else {
     // 如果前一个Block已分配的话，由于Footer不合法，因此只能迭代获取
-    block_t *front_block = find_by_cmp(block, cmp_back_is_block);
+    block_t *front_block = find_heap_by_cmp(block, cmp_back_is_block);
     dbg_assert(front_block != NULL);
     bool front_block_alloc = get_front_alloc(front_block);
     return flip(get_front_alloc(block) ^ front_block_alloc);
@@ -1221,14 +1223,14 @@ static void split_block(block_t *block, size_t asize) {
 }
 
 /**
- * @brief 在堆中寻找一个大小大于等于ASIZE的块
+ * @brief 在堆中寻找第一个大小大于等于ASIZE的块
  *
  * @par first fit
  *
  * @param[in] asize 目标大小
  * @return 块的地址，如果没有找到则是NULL
  */
-static block_t *find_fit(size_t asize) {
+static block_t *find_first_fit(size_t asize) {
   block_t *block;
 
   for (block = free_list_root; block != NULL; block = get_next(block)) {
@@ -1237,6 +1239,26 @@ static block_t *find_fit(size_t asize) {
     }
   }
   return NULL; // no fit found
+}
+
+/**
+ * @brief 遍历ROOT所指代的链表，找到其中block size最接近且大于ASZIE的block为止
+ *
+ * @param asize 目标block的大小
+ * @param root 链表根节点
+ * @return block_t* 如果没有找到返回NULL
+ */
+static block_t *find_best_fit(size_t asize, block_t *root) {
+  block_t *block;
+  block_t *min = NULL;
+  for (block = free_list_root; block != NULL; block = get_next(block)) {
+    if (!(get_alloc(block)) && (asize <= get_size(block))) {
+      if (min == NULL || get_size(min) > get_size(block)) {
+        min = block;
+      }
+    }
+  }
+  return min; // no fit found
 }
 
 /**
@@ -1429,7 +1451,7 @@ void *malloc(size_t size) {
   asize = max(min_block_size, asize);
 
   // Search the free list for a fit
-  block = find_fit(asize);
+  block = find_best_fit(asize, free_list_root);
 
   // If no fit is found, request more memory, and then and place the block
   if (block == NULL) {
