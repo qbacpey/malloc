@@ -1,2 +1,7 @@
 tput*
 .vscode\*
+*.o
+*.bc
+mdriver
+mdriver-dbg
+mdriver-emulate

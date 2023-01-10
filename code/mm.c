@@ -130,6 +130,13 @@ static const word_t low_order_mask = (word_t)0xF;
  */
 static const word_t size_mask = ~(word_t)0xF;
 
+typedef struct list_elem {
+  /** @brief 指向free list中前一个block的指针 */
+  struct list_elem *prev;
+  /** @brief 指向free list中后一个block的指针 */
+  struct list_elem *next;
+} list_elem_t;
+
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
   /** @brief Header contains size + allocation flag */
@@ -161,13 +168,7 @@ typedef struct block {
    * 不过Union中的其他成员可以是结构体，可以使用它们来保存一些其他的数据
    */
   union body {
-    struct list_elem {
-      /** @brief 指向free list中前一个block的指针 */
-      struct block *prev;
-
-      /** @brief 指向free list中后一个block的指针 */
-      struct block *next;
-    } list_elem;
+    list_elem_t list_elem;
     char payload[0];
   } body;
 
@@ -191,7 +192,7 @@ static block_t *heap_start = NULL;
  * @brief free list头节点
  * 不会是epilogue block
  */
-static block_t *free_list_root = NULL;
+static list_elem_t *free_list_root = NULL;
 
 /*
  *****************************************************************************
@@ -219,17 +220,17 @@ static bool check_free_block_aux(block_t *);
 static bool valid_block_format(block_t *);
 static bool check_word_align_dword(word_t);
 
-static block_t *get_prev(block_t *);
-static void set_prev(block_t *, block_t *);
-static block_t *get_next(block_t *);
-static void set_next(block_t *, block_t *);
+static list_elem_t *get_prev(list_elem_t *);
+static void set_prev(list_elem_t *, list_elem_t *);
+static list_elem_t *get_next(list_elem_t *);
+static void set_next(list_elem_t *, list_elem_t *);
 
 static block_t *find_next(block_t *);
 static block_t *find_heap_by_cmp(block_t *, bool cmp(block_t *, block_t *));
-static block_t *find_list_by_cmp(block_t *, block_t *,
-                                 bool cmp(block_t *, block_t *));
+static list_elem_t *find_list_by_cmp(list_elem_t *, list_elem_t *,
+                                     bool cmp(list_elem_t *, list_elem_t *));
 static bool cmp_back_is_block(block_t *block, block_t *curr);
-static bool cmp_insert_after_block(block_t *block, block_t *curr);
+static bool cmp_insert_after_list_elem(list_elem_t *block, list_elem_t *curr);
 
 /* Declaration end */
 
@@ -563,20 +564,21 @@ static block_t *find_heap_by_cmp(block_t *block,
 }
 
 /**
- * @brief 遍历ROOT中的所有block，直到CMP返回true为止
+ * @brief 遍历ROOT中的所有list_elem，直到CMP返回true为止
  *
  * @param root 待查找链表的起始Block
- * @param block 用于比较的Block
- * @param cmp 接收两个block_t*，前者是BLOCK，后者是每次迭代时变更的block
- * @return block_t*
+ * @param list_elem 用于比较的Block
+ * @param cmp
+ * 接收两个list_elem_t*，前者是LIST_ELEM，后者是每次迭代时变更的list_elem
+ * @return list_elem_t*
  */
-static block_t *find_list_by_cmp(block_t *root, block_t *block,
-                                 bool cmp(block_t *, block_t *)) {
-  dbg_requires(block != NULL);
-  dbg_requires(get_size(block) != 0);
+static list_elem_t *find_list_by_cmp(list_elem_t *root, list_elem_t *list_elem,
+                                     bool cmp(list_elem_t *, list_elem_t *)) {
+  dbg_requires(list_elem != NULL);
+  dbg_requires(get_size(payload_to_header(list_elem)) != 0);
 
-  for (block_t *curr = root; curr != NULL; curr = get_next(curr)) {
-    if (cmp(block, curr) == true) {
+  for (list_elem_t *curr = root; curr != NULL; curr = get_next(curr)) {
+    if (cmp(list_elem, curr) == true) {
       return curr;
     }
   }
@@ -587,66 +589,63 @@ static block_t *find_list_by_cmp(block_t *root, block_t *block,
  * @brief Get the prev pointer of THIS
  *
  * @param this
- * @return block_t*
+ * @return list_elem_t*
  */
-static block_t *get_prev(block_t *this) {
-  dbg_assert(!get_alloc(this));
-
-  return this->body.list_elem.prev;
+static list_elem_t *get_prev(list_elem_t *this) {
+  dbg_assert(!get_alloc(payload_to_header(this)));
+  return this->prev;
 }
 
 /**
- * @brief Set the prev pointer of THIS to BLOCK
+ * @brief Set the prev pointer of THIS to LIST_ELEM
  *
  * @param this
  * @param block
  */
-static void set_prev(block_t *this, block_t *block) {
-  dbg_assert(!get_alloc(this));
-  this->body.list_elem.prev = block;
+static void set_prev(list_elem_t *this, list_elem_t *block) {
+  dbg_assert(!get_alloc(payload_to_header(this)));
+  this->prev = block;
 }
 
 /**
  * @brief Get the next pointer of THIS
  *
  * @param this
- * @return block_t*
+ * @return list_elem_t*
  */
-static block_t *get_next(block_t *this) {
-  dbg_assert(!get_alloc(this));
-  return this->body.list_elem.next;
+static list_elem_t *get_next(list_elem_t *this) {
+  dbg_assert(!get_alloc(payload_to_header(this)));
+  return this->next;
 }
 
 /**
- * @brief Set the next pointer of THIS to BLOCK
+ * @brief Set the next pointer of THIS to LIST_ELEM
  *
  * @param this
  * @param block
  */
-static void set_next(block_t *this, block_t *block) {
-  dbg_assert(!get_alloc(this));
-  this->body.list_elem.next = block;
+static void set_next(list_elem_t *this, list_elem_t *block) {
+  dbg_assert(!get_alloc(payload_to_header(this)));
+  this->next = block;
 }
 
 /**
  * @brief 将CURR插入到FRONT之后
  *
- * @note FRONT不可以是链表的最后一个元素
- *
- * @param front block_t，CURR会被插入到它之后
- * @param curr block_t，不可位于任何链表中
+ * @param front list_elem_t，CURR会被插入到它之后
+ * @param curr list_elem_t，不可位于任何链表中
  * @pre FRONT和CURR都不可以是已分配的块
  * FRONT不可以是链表的最后一个元素
  */
-static void insert_after(block_t *front, block_t *curr) {
+static void insert_after(list_elem_t *front, list_elem_t *curr) {
   dbg_assert(front != NULL);
-  dbg_assert(get_size(front) != 0);
-  dbg_assert(get_alloc(front) == false);
-  dbg_assert(check_free_block_aux(front) == true);
+  dbg_assert(get_size(payload_to_header(front)) != 0);
+  dbg_assert(get_alloc(payload_to_header(front)) == false);
+  dbg_assert(check_free_block_aux(payload_to_header(front)) == true);
   dbg_assert(curr != NULL);
-  dbg_assert(get_size(curr) != 0);
-  dbg_assert(get_alloc(curr) == false);
-  dbg_assert(valid_block_format(curr) == true);
+  dbg_assert(get_size(payload_to_header(curr)) != 0);
+  dbg_assert(get_alloc(payload_to_header(curr)) == false);
+  dbg_assert(valid_block_format(payload_to_header(curr)) == true);
 
   set_next(curr, get_next(front));  // curr->next = front->next;
   set_prev(curr, front);            // curr->prev = front;
@@ -658,22 +657,20 @@ static void insert_after(block_t *front, block_t *curr) {
 /**
  * @brief 将CURR插入到BACK之前
  *
- * @note CURR不可以是链表的第一个元素
- *
  * @param curr 不可位于任何链表中
  * @param back CURR会被插入到它之前
  * @pre CURR和BACK都不可以是已分配的块
  * CURR不可以是链表的第一个元素
  */
-static void insert_before(block_t *curr, block_t *back) {
+static void insert_before(list_elem_t *curr, list_elem_t *back) {
   dbg_assert(back != NULL);
-  dbg_assert(get_size(back) != 0);
-  dbg_assert(get_alloc(back) == false);
-  dbg_assert(check_free_block_aux(back) == true);
+  dbg_assert(get_size(payload_to_header(back)) != 0);
+  dbg_assert(get_alloc(payload_to_header(back)) == false);
+  dbg_assert(check_free_block_aux(payload_to_header(back)) == true);
   dbg_assert(curr != NULL);
-  dbg_assert(get_size(curr) != 0);
-  dbg_assert(get_alloc(curr) == false);
-  dbg_assert(valid_block_format(curr) == true);
+  dbg_assert(get_size(payload_to_header(curr)) != 0);
+  dbg_assert(get_alloc(payload_to_header(curr)) == false);
+  dbg_assert(valid_block_format(payload_to_header(curr)) == true);
 
   set_prev(curr, get_prev(back));   // curr->prev = back->prev;
   set_next(curr, back);             // curr->next = back;
@@ -689,134 +686,136 @@ static void insert_before(block_t *curr, block_t *back) {
  * @param new_head 将要被插入到ROOT所指向的链表的元素
  * @pre NEW_HEAD不可以是已分配的块
  */
-static void push_front(block_t **root, block_t *new_head) {
+static void push_front(list_elem_t **root, list_elem_t *new_head) {
   dbg_assert(root != NULL);
   dbg_assert(new_head != NULL);
-  dbg_assert(get_size(new_head) != 0);
-  dbg_assert(get_alloc(new_head) == false);
-  dbg_assert(valid_block_format(new_head) == true);
+  dbg_assert(get_size(payload_to_header(new_head)) != 0);
+  dbg_assert(get_alloc(payload_to_header(new_head)) == false);
+  dbg_assert(valid_block_format(payload_to_header(new_head)) == true);
 
   set_next(new_head, *root); // new_head->next = *root;
   set_prev(new_head, NULL);  // new_head->prev = NULL;
   if (*root != NULL) {
-    dbg_assert(check_free_block_aux(*root) == true);
+    dbg_assert(check_free_block_aux(payload_to_header(*root)) == true);
     set_prev(*root, new_head); // (*root)->prev = new_head;
   }
   *root = new_head;
 }
 
 /**
- * @brief 根据BLOCK的地址顺序，将其插入到ROOT所指向的地址升序排列链表的合适位置
+ * @brief
+ * 根据LIST_ELEM的地址顺序，将其插入到ROOT所指向的地址升序排列链表的合适位置
  *
- * @par 有可能ROOT指向的block地址就比BLOCK要大
+ * @par 有可能ROOT指向的list_elem地址就比LIST_ELEM要大
  *
  * @param root 链表，其中元素按照地址升序进行排列
- * @param block
+ * @param list_elem
  */
-static void push_order(block_t **root, block_t *block) {
+static void push_order(list_elem_t **root, list_elem_t *list_elem) {
   dbg_assert(root != NULL);
-  dbg_assert(block != NULL);
-  dbg_assert(get_size(block) != 0);
-  dbg_assert(get_alloc(block) == false);
-  dbg_assert(valid_block_format(block) == true);
+  dbg_assert(list_elem != NULL);
+  dbg_assert(get_size(payload_to_header(list_elem)) != 0);
+  dbg_assert(get_alloc(payload_to_header(list_elem)) == false);
+  dbg_assert(valid_block_format(payload_to_header(list_elem)) == true);
 
   if (*root == NULL) {
     // 注意要显式设置，否则会有garbage
-    set_prev(block, NULL);
-    set_next(block, NULL);
-    *root = block;
-  } else if (*root > block) {
-    insert_before(block, *root);
-    *root = block;
+    set_prev(list_elem, NULL);
+    set_next(list_elem, NULL);
+    *root = list_elem;
+  } else if (*root > list_elem) {
+    insert_before(list_elem, *root);
+    *root = list_elem;
   } else {
-    block_t *prev = find_list_by_cmp(*root, block, cmp_insert_after_block);
+    list_elem_t *prev =
+        find_list_by_cmp(*root, list_elem, cmp_insert_after_list_elem);
     dbg_assert(prev != NULL);
-    insert_after(prev, block);
+    insert_after(prev, list_elem);
   }
   dbg_ensures(mm_checkheap(__LINE__));
 }
 
 /**
- * @brief 将ROOT所指向的链表的第一个元素移出链表，并将其返回
+ * @brief 将ROOT所指向的链表的第一个元素移出链表，并将其返回LIST_ELEM
  *
  * @param root 指向链表的第一个元素指针
- * @return block_t* 链表的原第一个元素
+ * @return list_elem_t* 链表的原第一个元素
  * @pre ROOT不能为NULL
  */
-static block_t *pop_front(block_t **root) {
+static list_elem_t *pop_front(list_elem_t **root) {
   dbg_assert(root != NULL);
   dbg_assert(*root != NULL);
-  dbg_assert(check_free_block_aux(*root) == true);
+  dbg_assert(check_free_block_aux(payload_to_header(*root)) == true);
 
-  block_t *old_head = *root;
+  list_elem_t *old_head = *root;
   set_prev(get_next(old_head), NULL); // old_head->next->prev = NULL;
   *root = get_next(old_head);         // (*root) = old_head->next;
   return old_head;
 }
 
 /**
- * @brief 将BLOCK从链表中移出链表
+ * @brief 将LIST_ELEM从链表中移出链表
  *
- * @note BLOCK不能为prologue block或者epilogue block
+ * @note LIST_ELEM不能为prologue list_elem或者epilogue list_elem
  *
- * @param block
- * @return block_t*
- * @pre BLOCK必须位于某个链表中，可以是头节点
+ * @param list_elem
+ * @return list_elem_t*
+ * @pre LIST_ELEM必须位于某个链表中，可以是头节点
  */
-static void remove_block(block_t *block) {
-  dbg_assert(block != NULL);
-  dbg_assert(get_size(block) != 0);
-  dbg_assert(get_alloc(block) == false);
-  dbg_assert(check_free_block_aux(block) == true);
+static void remove_list_elem(list_elem_t *list_elem) {
+  dbg_assert(list_elem != NULL);
+  dbg_assert(get_size(payload_to_header(list_elem)) != 0);
+  dbg_assert(get_alloc(payload_to_header(list_elem)) == false);
+  dbg_assert(check_free_block_aux(payload_to_header(list_elem)) == true);
 
   // TODO 如果是升级为segregate list的话，那么这里的实现需要修改
-  if (get_next(block) != NULL) {
-    set_prev(get_next(block), get_prev(block));
+  if (get_next(list_elem) != NULL) {
+    set_prev(get_next(list_elem), get_prev(list_elem));
   }
-  if (get_prev(block) != NULL) {
-    set_next(get_prev(block), get_next(block));
+  if (get_prev(list_elem) != NULL) {
+    set_next(get_prev(list_elem), get_next(list_elem));
   } else {
     // TODO 可能是头节点，需要修改ROOT指针，需要优化实现
-    free_list_root = get_next(block);
+    free_list_root = get_next(list_elem);
   }
 }
 
 /**
- * @brief 将BLOCK之前的元素移出链表
+ * @brief 将LIST_ELEM之前的元素移出链表
  *
- * @note BLOCK不可以是链表第一个元素
+ * @note LIST_ELEM不可以是链表第一个元素
  *
- * @param block
- * @return block_t*
+ * @param list_elem
+ * @return list_elem_t*
  */
-static block_t *remove_before(block_t *block) {
-  dbg_assert(block != NULL);
-  dbg_assert(get_size(block) != 0);
-  dbg_assert(get_alloc(block) == false);
-  dbg_assert(check_free_block_aux(block) == true);
+static list_elem_t *remove_before(list_elem_t *list_elem) {
+  dbg_assert(list_elem != NULL);
+  dbg_assert(get_size(payload_to_header(list_elem)) != 0);
+  dbg_assert(get_alloc(payload_to_header(list_elem)) == false);
+  dbg_assert(check_free_block_aux(payload_to_header(list_elem)) == true);
 
-  block_t *removed = get_prev(block);
+  list_elem_t *removed = get_prev(list_elem);
   if (get_prev(removed) != NULL)
-    set_next(get_prev(removed), block);
-  set_prev(block, get_prev(removed));
+    set_next(get_prev(removed), list_elem);
+  set_prev(list_elem, get_prev(removed));
   return removed;
 }
 
 /**
- * @brief 将BLOCK之后的元素移出链表
+ * @brief 将LIST_ELEM之后的元素移出链表
  *
- * @note BLOCK不可以是链表最后一个元素
+ * @note LIST_ELEM不可以是链表最后一个元素
  *
  * @param block
  * @return block_t*
  */
-static block_t *remove_after(block_t *block) {
+static list_elem_t *remove_after(list_elem_t *block) {
   dbg_assert(block != NULL);
-  dbg_assert(get_size(block) != 0);
-  dbg_assert(get_alloc(block) == false);
-  dbg_assert(check_free_block_aux(block) == true);
+  dbg_assert(get_size(payload_to_header(block)) != 0);
+  dbg_assert(get_alloc(payload_to_header(block)) == false);
+  dbg_assert(check_free_block_aux(payload_to_header(block)) == true);
 
-  block_t *removed = get_next(block);
+  list_elem_t *removed = get_next(block);
   if (get_next(removed) != NULL)
     set_prev(get_next(removed), block);
   set_next(block, get_next(removed));
@@ -838,18 +837,19 @@ static bool cmp_back_is_block(block_t *block, block_t *curr) {
 /**
  * @brief 按照地址升序确定是否要在BLOCK的后面插入CURR
  *
- * @param block
+ * @param list_elem
  * @param curr
  * @return true
  * @return false
  */
-static bool cmp_insert_after_block(block_t *block, block_t *curr) {
-  dbg_assert(block != NULL);
+static bool cmp_insert_after_list_elem(list_elem_t *list_elem,
+                                       list_elem_t *curr) {
+  dbg_assert(list_elem != NULL);
   dbg_assert(curr != NULL);
-  dbg_assert(curr < block);
+  dbg_assert(curr < list_elem);
 
-  // 实际使用的时候遍历列表中的block，找到第一个next比BLOCK大的CURR就行了
-  return get_next(curr) == NULL || get_next(curr) > block;
+  // 实际使用的时候遍历列表中的list_elem，找到第一个next比BLOCK大的CURR就行了
+  return get_next(curr) == NULL || get_next(curr) > list_elem;
 }
 
 /**
@@ -860,13 +860,13 @@ static bool cmp_insert_after_block(block_t *block, block_t *curr) {
  * @param aux 辅助函数，接受一个block_t*类型的参数，返回一个bool表示操作是否成功
  * @param heap_count 堆中的节点数目
  */
-static bool valid_list_iterate(block_t *root, bool aux(block_t *),
+static bool valid_list_iterate(list_elem_t *root, bool aux(block_t *),
                                size_t heap_count) {
   bool validation = false;
   size_t list_count = 0;
-  for (block_t *curr = root; curr != NULL; curr = get_next(curr)) {
+  for (list_elem_t *curr = root; curr != NULL; curr = get_next(curr)) {
     list_count++;
-    validation = aux(curr);
+    validation = aux(payload_to_header(curr));
     if (!validation) {
       dbg_printf("\n=============\n%d: Aux fail\n=============\n", __LINE__);
       goto done;
@@ -1040,50 +1040,54 @@ static bool check_front_alloc_bit(block_t *block) {
  * @brief
  * 检查自己的next字段指向的节点的prev是否指向自己，如果next为空直接返回true
  *
- * @param block
+ * @param list_elem
  * @return true
  * @return false
  */
-static bool check_match_with_front(block_t *block) {
-  return get_next(block) != NULL ? block == get_prev(get_next(block)) : true;
+static bool check_match_with_front(list_elem_t *list_elem) {
+  return get_next(list_elem) != NULL
+             ? list_elem == get_prev(get_next(list_elem))
+             : true;
 }
 
 /**
  * @brief
  * 检查自己的prev字段指向的节点的next是否指向自己，如果prev为空直接返回true
  *
- * @param block
+ * @param list_elem
  * @return true
  * @return false
  */
-static bool check_match_with_back(block_t *block) {
-  return get_prev(block) != NULL ? block == get_next(get_prev(block)) : true;
+static bool check_match_with_back(list_elem_t *list_elem) {
+  return get_prev(list_elem) != NULL
+             ? list_elem == get_next(get_prev(list_elem))
+             : true;
 }
 
 /**
  * @brief 调用其他函数，检查链表中指定节点的prev和next是否都是合法的地址。
  * 如果是链表头节点的话，那么prev可能为NULL
  *
- * @param block
+ * @param list_elem
  * @return true
  * @return false
  */
-static bool check_node_addr(block_t *block) {
-  return (check_address_in_heap((word_t)get_next(block)) ||
-          get_next(block) == NULL) &&
-         (check_address_in_heap((word_t)get_prev(block)) ||
-          get_prev(block) == NULL);
+static bool check_node_addr(list_elem_t *list_elem) {
+  return (check_address_in_heap((word_t)get_next(list_elem)) ||
+          get_next(list_elem) == NULL) &&
+         (check_address_in_heap((word_t)get_prev(list_elem)) ||
+          get_prev(list_elem) == NULL);
 }
 
 /**
  * @brief 检查BLOCK的next的地址是不是比BLOCK的地址大
  *
- * @param block
+ * @param list_elem
  * @return true
  * @return false
  */
-static bool check_node_ordered_with_next(block_t *block) {
-  return get_next(block) == NULL || get_next(block) > block;
+static bool check_node_ordered_with_next(list_elem_t *list_elem) {
+  return get_next(list_elem) == NULL || get_next(list_elem) > list_elem;
 }
 
 /**
@@ -1095,36 +1099,37 @@ static bool check_node_ordered_with_next(block_t *block) {
  */
 static bool valid_node(block_t *block) {
   bool validation = false;
+  list_elem_t *list_elem = (list_elem_t *)get_body(block);
 
   // 检查next以及prev指针
-  validation = check_node_addr(block);
+  validation = check_node_addr(list_elem);
   if (!validation) {
     dbg_printf("\n=============\n%d: prev or next invalid", __LINE__);
     goto done;
   }
 
-  validation = check_match_with_front(block);
+  validation = check_match_with_front(list_elem);
   if (!validation) {
-    dbg_printf("\n=============\n%d: next block's prev don't point to this "
-               "block\n",
+    dbg_printf("\n=============\n%d: next list_elem's prev don't point to this "
+               "list_elem\n",
                __LINE__);
     goto done;
   }
 
-  validation = check_match_with_back(block);
+  validation = check_match_with_back(list_elem);
   if (!validation) {
-    dbg_printf("\n=============\n%d: prev block's next don't point to this "
-               "block\n",
+    dbg_printf("\n=============\n%d: prev list_elem's next don't point to this "
+               "list_elem\n",
                __LINE__);
     goto done;
   }
 
-  validation = check_node_ordered_with_next(block);
+  validation = check_node_ordered_with_next(list_elem);
   if (!validation) {
     dbg_printf("\n=============\n%d: Address of next pointer(%p) higher than "
-               "this block(%p)"
+               "this list_elem(%p)"
                "\n",
-               __LINE__, get_next(block), block);
+               __LINE__, get_next(list_elem), list_elem);
 
     goto done;
   }
@@ -1185,6 +1190,7 @@ static block_t *coalesce_block(block_t *block) {
   // 获取堆中前后邻接的Block
   block_t *result = block;
   block_t *adj_back = find_next(block);
+  list_elem_t *adj_back_list_elem = (list_elem_t *)get_body(adj_back);
   bool adj_front_allocated = get_front_alloc(block);
   bool adj_back_allocated = get_alloc(adj_back);
 
@@ -1194,21 +1200,22 @@ static block_t *coalesce_block(block_t *block) {
       // Case 1 两边都已分配
     } else {
       // Case 2 后边已释放 上述两种情况都不需要改变result
-      remove_block(adj_back);
+      remove_list_elem(adj_back_list_elem);
       write_block(block, get_size(block) + get_size(adj_back), false, true);
     }
   } else {
     block_t *adj_front = find_prev(block);
+    list_elem_t *adj_front_list_elem = (list_elem_t *)get_body(adj_front);
     if (adj_back_allocated) {
       // Case 3 前边已释放
-      remove_block(adj_front);
+      remove_list_elem(adj_front_list_elem);
       write_block(adj_front, get_size(adj_front) + get_size(block), false,
                   true);
       result = adj_front;
     } else {
       // Case 4 两边都已释放
-      remove_block(adj_front);
-      remove_block(adj_back);
+      remove_list_elem(adj_front_list_elem);
+      remove_list_elem(adj_front_list_elem);
       write_block(adj_front,
                   get_size(adj_front) + get_size(block) + get_size(adj_back),
                   false, true);
@@ -1269,7 +1276,8 @@ static block_t *extend_heap(size_t size) {
   block = coalesce_block(block);
 
   // 更新链表头部为新Free Block
-  push_order(&free_list_root, block);
+
+  push_order(&free_list_root, (list_elem_t *)get_body(block));
 
   dbg_ensures(valid_node(block));
   return block;
@@ -1307,7 +1315,8 @@ static void split_block(block_t *block, size_t asize) {
     block_next = find_next(block);
     // 如果切分了Block，那么它之前的Block应该是未分配状态
     write_block(block_next, block_size - asize, false, true);
-    push_order(&free_list_root, block_next);
+    // 将新的Free Block插入到合适的List中
+    push_order(&free_list_root, (list_elem_t *)get_body(block_next));
     // 它的前一个Block现在是free状态了
     result_front_bit = false;
     result_last_block = block_next;
@@ -1321,17 +1330,19 @@ static void split_block(block_t *block, size_t asize) {
 }
 
 /**
- * @brief 在堆中寻找第一个大小大于等于ASIZE的块
+ * @brief 遍历ROOT所指代的链表，寻找第一个大小大于等于ASIZE的块
  *
  * @par first fit
  *
  * @param[in] asize 目标大小
  * @return 块的地址，如果没有找到则是NULL
  */
-static block_t *find_first_fit(size_t asize, block_t *root) {
-  block_t *block;
+static block_t *find_first_fit(size_t asize, list_elem_t *root) {
+  list_elem_t *list_elem;
+  block_t *block = NULL;
 
-  for (block = root; block != NULL; block = get_next(block)) {
+  for (list_elem = root; list_elem != NULL; list_elem = get_next(list_elem)) {
+    block = payload_to_header(list_elem);
     if (!(get_alloc(block)) && (asize <= get_size(block))) {
       return block;
     }
@@ -1340,23 +1351,26 @@ static block_t *find_first_fit(size_t asize, block_t *root) {
 }
 
 /**
- * @brief 遍历ROOT所指代的链表，找到其中block size最接近且大于ASZIE的block为止
+ * @brief 遍历ROOT所指代的链表，找到其中list_elem
+ * size最接近且大于ASZIE的block_t为止
  *
- * @param asize 目标block的大小
+ * @param asize 目标list_elem的大小
  * @param root 链表根节点
  * @return block_t* 如果没有找到返回NULL
  */
-static block_t *find_best_fit(size_t asize, block_t *root) {
-  block_t *block;
-  block_t *min = NULL;
-  for (block = root; block != NULL; block = get_next(block)) {
+static block_t *find_best_fit(size_t asize, list_elem_t *root) {
+  list_elem_t *list_elem;
+  block_t *block = NULL;
+  block_t *min_block = NULL;
+  for (list_elem = root; list_elem != NULL; list_elem = get_next(list_elem)) {
+    block = payload_to_header(list_elem);
     if (!(get_alloc(block)) && (asize <= get_size(block))) {
-      if (min == NULL || get_size(min) > get_size(block)) {
-        min = block;
+      if (min_block == NULL || get_size(min_block) > get_size(block)) {
+        min_block = block;
       }
     }
   }
-  return min; // no fit found
+  return min_block; // no fit found
 }
 
 /**
@@ -1566,7 +1580,8 @@ void *malloc(size_t size) {
   dbg_assert(!get_alloc(block));
 
   // Mark block as allocated
-  remove_block(block);
+
+  remove_list_elem(get_body(block));
   size_t block_size = get_size(block);
   write_block(block, block_size, true, get_front_alloc(block));
 
@@ -1615,7 +1630,7 @@ void free(void *bp) {
   block = coalesce_block(block);
 
   // 将新Free block插入到合适的链表中
-  push_order(&free_list_root, block);
+  push_order(&free_list_root, (list_elem_t *)get_body(block));
 
   dbg_ensures(mm_checkheap(__LINE__));
 }
