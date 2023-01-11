@@ -4,13 +4,13 @@
  *
  * 15-213: Introduction to Computer Systems
  *
- * Explicit List实现：
+ * Segregate List实现：
  *
- * Placement policy：first fit
+ * Placement policy：best fit
  * Splitting policy：不少于最小块的大小即可
  * Coalescing policy：immediate coalesce
- * Insertion policy：LIFO
- * Eliminating Footers：none
+ * Insertion policy：LIFO & Address order
+ * Eliminating Footers：yes
  *
  *************************************************************************
  *
@@ -134,12 +134,58 @@ static const word_t low_order_mask = (word_t)0xF;
  */
 static const word_t size_mask = ~(word_t)0xF;
 
+#define G_EMPTY 255
+#define G_32 0
+#define G_48 1
+#define G_64 2
+#define G_128 3
+#define G_256 4
+#define G_512 5
+#define G_1024 6
+#define G_INF 7
+
+/** @brief 如果ASIZE比这个数大，那么该Block就有多种不同大小的Block */
+#define MAX_SINGLE_BLOCK_GROUP 64
+
+/**
+ * @brief ASIZE与list_table的INDEX之间映射的数组，
+ *        映射完毕后可以在list_table寻址对应list的root
+ *
+ * @note 执行映射操作之前需要先查看ASIZE是不是大于1024。
+ *       ASIZE必须对齐16Byte之后截取高4位之后的五位数字（0~63），
+ *       左移4位，再到数组中进行寻址
+ *
+ * @par 数组中各下标含有如下内容：
+ * + 0：asize = 1024，为G_1024
+ * + 1：无对应index，为G_EMPTY；
+ * + 2：asize = 32，为G_32；
+ * + 3：asize = 48，为G_48；
+ * + 4：asize = 64，为G_64；
+ * + 5 ~ 8：asize = (64, 128]，为G_128；
+ * + 9 ~ 16：asize = (128, 256]，为G_256；
+ * + 17 ~ 32：asize = (256, 512]，为G_512；
+ * + 33 ~ 63：asize = (512, 1024)，为G_1024；
+ *
+ */
+static const uint8_t asize_to_index[] = {
+    G_1024, G_EMPTY, G_32,   G_48,   G_64,   G_128,  G_128,  G_128,
+    G_128,  G_256,   G_256,  G_256,  G_256,  G_256,  G_256,  G_256,
+    G_256,  G_512,   G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
+    G_512,  G_512,   G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
+    G_512,  G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024};
+
 typedef struct list_elem {
   /** @brief 指向free list中后一个block的指针 */
   struct list_elem *next;
   /** @brief 指向free list中前一个block的指针 */
   struct list_elem *prev;
 } list_elem_t;
+
+/** @brief 用于向链表中push block的函数类型 */
+typedef void (*push_func_t)(list_elem_t *, list_elem_t *);
 
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
@@ -184,13 +230,20 @@ typedef struct block {
    */
 } block_t;
 
-/* Global variables */
+/** @brief 8个Segregate List */
+#define LIST_TABLE_SIZE 8
 
 /**
- * @brief Pointer to first block in the heap
+ * @brief 堆第一个Block的起始位置，类型为block_t *，mem_heap_lo() + prologue
  *
- * 实际是prologue的尾巴 */
-static block_t *heap_start = NULL;
+ * @note 不再作为标识堆是否被初始化的依据
+ *
+ */
+#define HEAP_START (block_t *)(mem_heap_lo() + wsize)
+
+/* Global variables */
+
+static list_elem_t *list_table[LIST_TABLE_SIZE];
 
 /**
  * @brief free list头节点
@@ -239,11 +292,16 @@ static list_elem_t *free_list_root = END_OF_LIST;
 static bool check_free_block_aux(block_t *);
 static bool valid_block_format(block_t *);
 static bool check_word_align_dword(word_t);
+static bool check_address_in_heap(word_t);
 
 static list_elem_t *get_prev(list_elem_t *);
 static void set_prev(list_elem_t *, list_elem_t *);
 static list_elem_t *get_next(list_elem_t *);
 static void set_next(list_elem_t *, list_elem_t *);
+
+static void push_front(list_elem_t *root, list_elem_t *new_head);
+static void push_order(list_elem_t *root, list_elem_t *block);
+static void remove_list_elem(list_elem_t *);
 
 static block_t *find_next(block_t *);
 static block_t *find_heap_by_cmp(block_t *, bool cmp(block_t *, block_t *));
@@ -253,6 +311,15 @@ static bool cmp_back_is_block(block_t *block, block_t *curr);
 static bool cmp_insert_after_list_elem(list_elem_t *block, list_elem_t *curr);
 
 /* Declaration end */
+
+/**
+ * @brief 用于在INDEX（G_XX）和对应的push函数之间提供映射。
+ *        除了32、48、64都需要维护address order
+ *
+ */
+static const push_func_t index_to_push_func[] = {
+    push_front, push_front, push_front, push_order,
+    push_order, push_order, push_order, push_order};
 
 /**
  * @brief Returns the maximum of two integers.
@@ -582,7 +649,7 @@ static block_t *find_heap_by_cmp(block_t *block,
   dbg_requires(block != NULL);
   dbg_requires(get_size(block) != 0);
 
-  for (block_t *curr = heap_start; get_size(curr) != 0;
+  for (block_t *curr = HEAP_START; get_size(curr) != 0;
        curr = find_next(curr)) {
     if (cmp(block, curr) == true) {
       return curr;
@@ -717,28 +784,18 @@ static void insert_before(list_elem_t *curr, list_elem_t *back) {
 /**
  * @brief 将NEW_HEAD插入到ROOT所指向的链表的头部
  *
- * @deprecated 实现未修改为虚拟头节点
+ * @note ROOT必须为链表虚拟根节点
  *
- * @param root 指向链表的第一个元素的指针
+ * @param root 链表虚拟根节点
  * @param new_head 将要被插入到ROOT所指向的链表的元素
  * @pre NEW_HEAD不可以是已分配的块
  */
-static void push_front(list_elem_t **root, list_elem_t *new_head) {
+static void push_front(list_elem_t *root, list_elem_t *new_head) {
   dbg_assert(root != NULL);
-  dbg_assert(new_head != NULL);
-  dbg_assert(get_size(payload_to_header(new_head)) != 0);
-  dbg_assert(get_alloc(payload_to_header(new_head)) == false);
-  dbg_assert(valid_block_format(payload_to_header(new_head)) == true);
+  dbg_assert(check_address_in_heap((word_t)root) == false);
 
-  set_next(new_head, *root); // new_head->next = *root;
-  set_prev(new_head, NULL);  // new_head->prev = NULL;
-  if (*root != NULL) {
-    dbg_assert(check_free_block_aux(payload_to_header(*root)) == true);
-    set_prev(*root, new_head); // (*root)->prev = new_head;
-  }
-  *root = new_head;
+  insert_after(root, new_head);
 }
-
 /**
  * @brief
  * 根据LIST_ELEM的地址顺序，将其插入到ROOT所指向的地址升序排列链表的合适位置
@@ -764,20 +821,18 @@ static void push_order(list_elem_t *root, list_elem_t *list_elem) {
 /**
  * @brief 将ROOT所指向的链表的第一个元素移出链表，并将其返回LIST_ELEM
  *
- * @deprecated 实现未修改为虚拟头节点
+ * @note ROOT必须为链表虚拟根节点
  *
- * @param root 指向链表的第一个元素指针
+ * @param root 链表虚拟根节点
  * @return list_elem_t* 链表的原第一个元素
  * @pre ROOT不能为NULL
  */
-static list_elem_t *pop_front(list_elem_t **root) {
+static list_elem_t *pop_front(list_elem_t *root) {
   dbg_assert(root != NULL);
-  dbg_assert(*root != NULL);
-  dbg_assert(check_free_block_aux(payload_to_header(*root)) == true);
+  dbg_assert(check_address_in_heap((word_t)root) == false);
 
-  list_elem_t *old_head = *root;
-  set_prev(get_next(old_head), NULL); // old_head->next->prev = NULL;
-  *root = get_next(old_head);         // (*root) = old_head->next;
+  list_elem_t *old_head = root->next;
+  remove_list_elem(old_head);
   return old_head;
 }
 
@@ -1058,7 +1113,7 @@ done:
  * @return false
  */
 static bool check_front_alloc_bit(block_t *block) {
-  if (block == heap_start) {
+  if (block == HEAP_START) {
     // 自己是堆中第一个数据块的话
     return flip(get_front_alloc(block) ^ true);
   } else {
@@ -1068,6 +1123,27 @@ static bool check_front_alloc_bit(block_t *block) {
     bool front_block_alloc = get_front_alloc(front_block);
     return flip(get_front_alloc(block) ^ front_block_alloc);
   }
+}
+
+/**
+ * @brief 检查LIST_ELEM是不是一个虚拟根节点
+ * 
+ * @param list_elem 
+ * @return true 
+ * @return false 
+ */
+static bool check_addr_is_root(list_elem_t *list_elem){
+  dbg_assert(list_table[0] != NULL);
+
+  if(flip(check_address_in_heap((word_t)list_elem)) == false){
+    return false;
+  }
+  for(int i = 0; i < LIST_TABLE_SIZE; i++){
+    if(list_table[i] == list_elem){
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1095,9 +1171,7 @@ static bool check_match_with_front(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_match_with_back(list_elem_t *list_elem) {
-  return get_prev(list_elem) != free_list_root
-             ? list_elem == get_next(get_prev(list_elem))
-             : true;
+  return list_elem == get_next(get_prev(list_elem));
 }
 
 /**
@@ -1114,7 +1188,7 @@ static bool check_node_addr(list_elem_t *list_elem) {
   return (check_address_in_heap((word_t)get_next(list_elem)) ||
           get_next(list_elem) == END_OF_LIST) &&
          (check_address_in_heap((word_t)get_prev(list_elem)) ||
-          (void *)get_prev(list_elem) == (void *)&free_list_root);
+          check_addr_is_root(get_prev(list_elem)));
 }
 
 /**
@@ -1162,15 +1236,18 @@ static bool valid_node(block_t *block) {
     goto done;
   }
 
-  validation = check_node_ordered_with_next(list_elem);
-  if (!validation) {
-    dbg_printf("\n=============\n%d: Address of next pointer(%p) higher than "
-               "this list_elem(%p)"
-               "\n",
-               __LINE__, get_next(list_elem), list_elem);
+  if (get_size(block) > MAX_SINGLE_BLOCK_GROUP) {
+    validation = check_node_ordered_with_next(list_elem);
+    if (!validation) {
+      dbg_printf("\n=============\n%d: Address of next pointer(%p) higher than "
+                 "this list_elem(%p)"
+                 "\n",
+                 __LINE__, get_next(list_elem), list_elem);
 
-    goto done;
+      goto done;
+    }
   }
+
 done:
   if (!validation) {
     dbg_print_block(block);
@@ -1470,7 +1547,7 @@ bool mm_checkheap(int line) {
   bool valid = false;
 
   // 检查prologue block格式
-  valid = check_tag(*find_prev_footer(heap_start), 0, true);
+  valid = check_tag(*find_prev_footer(HEAP_START), 0, true);
   if (!valid) {
     dbg_printf("\n=============\n%d: prologue block format error!", __LINE__);
     goto done;
@@ -1481,7 +1558,7 @@ bool mm_checkheap(int line) {
   size_t count = 0;
 
   // 检查堆中的每一个块的格式是否合法，同时统计其中free block的数目
-  for (curr = heap_start; get_size(curr) != 0; curr = find_next(curr)) {
+  for (curr = HEAP_START; get_size(curr) != 0; curr = find_next(curr)) {
     valid = valid_block_format(curr);
     if (!valid) {
       dbg_printf("\n=============\n%d: Block format invalid", __LINE__);
@@ -1550,10 +1627,10 @@ bool mm_init(void) {
   start[0] = pack(0, true, true); // Heap prologue (block footer)
   start[1] = pack(0, true, true); // Heap epilogue (block header)
 
-  // Heap starts with first "block header", currently the epilogue
-  heap_start = (block_t *)&(start[1]);
-  // 需要显式初始化一下
-  free_list_root = END_OF_LIST;
+  // 将各segregate list指针从NULL显式初始化为END_OF_LIST
+  for (int i = 0; i != LIST_TABLE_SIZE; i++)
+    list_table[i] = END_OF_LIST;
+
 
   block_t *first_block = NULL;
 
@@ -1587,7 +1664,7 @@ void *malloc(size_t size) {
   void *bp = NULL;
 
   // Initialize heap if it isn't initialized
-  if (heap_start == NULL) {
+  if (list_table[0] == NULL) {
     mm_init();
   }
 
