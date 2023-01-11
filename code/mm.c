@@ -671,7 +671,7 @@ static list_elem_t *find_list_by_cmp(list_elem_t *root, list_elem_t *list_elem,
   dbg_requires(list_elem != NULL);
   dbg_requires(get_size(payload_to_header(list_elem)) != 0);
 
-  for (list_elem_t *curr = root; curr != END_OF_LIST; curr = get_next(curr)) {
+  for (list_elem_t *curr = root; curr != END_OF_LIST; curr = curr->next) {
     if (cmp(list_elem, curr) == true) {
       return curr;
     }
@@ -747,13 +747,13 @@ static void insert_after(list_elem_t *front, list_elem_t *curr) {
   dbg_assert(get_alloc(payload_to_header(curr)) == false);
   dbg_assert(valid_block_format(payload_to_header(curr)) == true);
 
-  set_next(curr, get_next(front)); // curr->next = front->next;
-  set_prev(curr, front);           // curr->prev = front;
-  set_next(front, curr);           // front->next = curr;
+  curr->next = front->next; // set_next(curr, front->next);
+  curr->prev = front;       // set_prev(curr, front);
+  front->next = curr;       // set_next(front, curr);
 
   /* 如果FRONT有next结点的话，那么需要让该结点的prev指向curr */
-  if (get_next(curr) != END_OF_LIST) // if (curr->next != NULL)
-    set_prev(get_next(curr), curr);  // curr->next->prev = curr;
+  if (curr->next != END_OF_LIST) // if (curr->next != NULL)
+    curr->next->prev = curr;     // set_prev(curr->next, curr);
 }
 
 /**
@@ -776,12 +776,12 @@ static void insert_before(list_elem_t *curr, list_elem_t *back) {
   dbg_assert(get_alloc(payload_to_header(curr)) == false);
   dbg_assert(valid_block_format(payload_to_header(curr)) == true);
 
-  set_prev(curr, get_prev(back)); // curr->prev = back->prev;
-  set_next(curr, back);           // curr->next = back;
-  set_prev(back, curr);           // back->prev = curr;
+  curr->prev = back->prev; // set_prev(curr, back->prev);
+  curr->next = back;       // set_next(curr, back);
+  back->prev = curr;       // set_prev(back, curr);
 
   /* 对于BACK有prev结点的话，需要让该结点的next指向curr */
-  set_next(get_prev(curr), curr); //   curr->prev->next = curr;
+  curr->prev->next = curr; // set_next(curr->prev, curr);
 }
 
 /**
@@ -855,10 +855,12 @@ static void remove_list_elem(list_elem_t *list_elem) {
   dbg_assert(get_alloc(payload_to_header(list_elem)) == false);
   dbg_assert(check_free_block_aux(payload_to_header(list_elem)) == true);
 
-  if (get_next(list_elem) != END_OF_LIST) {
-    set_prev(get_next(list_elem), get_prev(list_elem));
+  if (list_elem->next != END_OF_LIST) {
+    list_elem->next->prev =
+        list_elem->prev; // set_prev(list_elem->next, list_elem->prev);
   }
-  set_next(get_prev(list_elem), get_next(list_elem));
+  list_elem->prev->next =
+      list_elem->next; // set_next(list_elem->prev, list_elem->next);
 }
 
 /**
@@ -891,10 +893,10 @@ static list_elem_t *remove_before(list_elem_t *list_elem) {
   dbg_assert(get_alloc(payload_to_header(list_elem)) == false);
   dbg_assert(check_free_block_aux(payload_to_header(list_elem)) == true);
 
-  list_elem_t *removed = get_prev(list_elem);
-  if (get_prev(removed) != NULL)
-    set_next(get_prev(removed), list_elem);
-  set_prev(list_elem, get_prev(removed));
+  list_elem_t *removed = list_elem->prev;
+  if (removed->prev != NULL)
+    set_next(removed->prev, list_elem);
+  set_prev(list_elem, removed->prev);
   return removed;
 }
 
@@ -914,10 +916,10 @@ static list_elem_t *remove_after(list_elem_t *block) {
   dbg_assert(get_alloc(payload_to_header(block)) == false);
   dbg_assert(check_free_block_aux(payload_to_header(block)) == true);
 
-  list_elem_t *removed = get_next(block);
-  if (get_next(removed) != NULL)
-    set_prev(get_next(removed), block);
-  set_next(block, get_next(removed));
+  list_elem_t *removed = block->next;
+  if (removed->next != NULL)
+    set_prev(removed->next, block);
+  set_next(block, removed->next);
   return removed;
 }
 
@@ -978,7 +980,7 @@ static bool cmp_insert_after_list_elem(list_elem_t *list_elem,
   dbg_assert(curr < list_elem);
 
   // 实际使用的时候遍历列表中的list_elem，找到第一个next比BLOCK大的CURR就行了
-  return get_next(curr) > list_elem;
+  return curr->next > list_elem;
 }
 
 /**
@@ -994,7 +996,7 @@ static bool valid_list_iterate(bool aux(block_t *), size_t heap_count) {
   size_t list_count = 0;
   for (int i = 0; i < LIST_TABLE_SIZE; i++) {
     for (list_elem_t *curr = list_table[i]; curr != END_OF_LIST;
-         curr = get_next(curr)) {
+         curr = curr->next) {
       list_count++;
       validation = aux(payload_to_header(curr));
       if (!validation) {
@@ -1196,9 +1198,8 @@ static bool check_addr_is_root(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_match_with_front(list_elem_t *list_elem) {
-  return get_next(list_elem) != END_OF_LIST
-             ? list_elem == get_prev(get_next(list_elem))
-             : true;
+  return list_elem->next != END_OF_LIST ? list_elem == list_elem->next->prev
+                                        : true;
 }
 
 /**
@@ -1212,7 +1213,7 @@ static bool check_match_with_front(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_match_with_back(list_elem_t *list_elem) {
-  return list_elem == get_next(get_prev(list_elem));
+  return list_elem == get_next(list_elem->prev);
 }
 
 /**
@@ -1225,8 +1226,8 @@ static bool check_match_with_back(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_node_prev(list_elem_t *list_elem) {
-  return (check_address_in_heap((word_t)get_prev(list_elem)) ||
-          check_addr_is_root(get_prev(list_elem)));
+  return (check_address_in_heap((word_t)list_elem->prev) ||
+          check_addr_is_root(list_elem->prev));
 }
 
 /**
@@ -1237,8 +1238,8 @@ static bool check_node_prev(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_node_next(list_elem_t *list_elem) {
-  return (check_address_in_heap((word_t)get_next(list_elem)) ||
-          get_next(list_elem) == END_OF_LIST);
+  return (check_address_in_heap((word_t)list_elem->next) ||
+          list_elem->next == END_OF_LIST);
 }
 
 /**
@@ -1249,7 +1250,7 @@ static bool check_node_next(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_node_ordered_with_next(list_elem_t *list_elem) {
-  return get_next(list_elem) == END_OF_LIST || get_next(list_elem) > list_elem;
+  return list_elem->next == END_OF_LIST || list_elem->next > list_elem;
 }
 
 /**
@@ -1268,14 +1269,14 @@ static bool valid_node(block_t *block) {
   validation = check_node_next(list_elem);
   if (!validation) {
     dbg_printf("\n=============\n%d: next invalid (%p)", __LINE__,
-               get_next(list_elem));
+               list_elem->next);
     goto done;
   }
 
   validation = check_node_prev(list_elem);
   if (!validation) {
     dbg_printf("\n=============\n%d: prev invalid (%p)", __LINE__,
-               get_prev(list_elem));
+               list_elem->prev);
     goto done;
   }
 
@@ -1301,7 +1302,7 @@ static bool valid_node(block_t *block) {
       dbg_printf("\n=============\n%d: Address of next pointer(%p) higher than "
                  "this list_elem(%p)"
                  "\n",
-                 __LINE__, get_next(list_elem), list_elem);
+                 __LINE__, list_elem->next, list_elem);
 
       goto done;
     }
@@ -1517,7 +1518,7 @@ static block_t *find_first_fit(size_t asize) {
   uint8_t index = deduce_list_index(asize);
   for (int i = index; i < LIST_TABLE_SIZE; i++) {
     for (list_elem = get_next(get_list_by_index(index));
-         list_elem != END_OF_LIST; list_elem = get_next(list_elem)) {
+         list_elem != END_OF_LIST; list_elem = list_elem->next) {
       block = payload_to_header(list_elem);
       if (!(get_alloc(block)) && (asize <= get_size(block))) {
         return block;
@@ -1542,7 +1543,7 @@ static block_t *find_best_fit(size_t asize, list_elem_t *root) {
   block_t *block = NULL;
   block_t *min_block = NULL;
   for (list_elem = root; list_elem != END_OF_LIST;
-       list_elem = get_next(list_elem)) {
+       list_elem = list_elem->next) {
     block = payload_to_header(list_elem);
     if (!(get_alloc(block)) && (asize <= get_size(block))) {
       if (min_block == NULL || get_size(min_block) > get_size(block)) {
