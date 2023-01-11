@@ -298,15 +298,15 @@ static bool check_word_align_dword(word_t);
 static bool check_address_in_heap(word_t);
 static bool check_addr_is_root(list_elem_t *);
 
-static list_elem_t *get_prev(list_elem_t *);
-static void set_prev(list_elem_t *, list_elem_t *);
-static list_elem_t *get_next(list_elem_t *);
-static void set_next(list_elem_t *, list_elem_t *);
+static inline list_elem_t *get_prev(list_elem_t *);
+static inline void set_prev(list_elem_t *, list_elem_t *);
+static inline list_elem_t *get_next(list_elem_t *);
+static inline void set_next(list_elem_t *, list_elem_t *);
 
 static void push_front(list_elem_t *root, list_elem_t *new_head);
 static void push_order(list_elem_t *root, list_elem_t *block);
 static void remove_list_elem(list_elem_t *);
-static inline list_elem_t *get_list_by_index(uint8_t);
+static list_elem_t *get_list_by_index(uint8_t);
 
 static block_t *find_next(block_t *);
 static block_t *find_heap_by_cmp(block_t *, bool cmp(block_t *, block_t *));
@@ -332,7 +332,7 @@ static const push_func_t index_to_push_func[] = {
  * @param[in] y
  * @return `x` if `x > y`, and `y` otherwise.
  */
-static inline size_t max(size_t x, size_t y) { return (x > y) ? x : y; }
+static size_t max(size_t x, size_t y) { return (x > y) ? x : y; }
 
 /**
  * @brief 将B的布尔值反转
@@ -341,7 +341,7 @@ static inline size_t max(size_t x, size_t y) { return (x > y) ? x : y; }
  * @return true
  * @return false
  */
-static inline bool flip(bool b) { return b != true; }
+static bool flip(bool b) { return b != true; }
 
 /**
  * @brief Rounds `size` up to next multiple of n
@@ -349,7 +349,7 @@ static inline bool flip(bool b) { return b != true; }
  * @param[in] n
  * @return The size after rounding up
  */
-static inline size_t round_up(size_t size, size_t n) {
+static size_t round_up(size_t size, size_t n) {
   return n * ((size + (n - 1)) / n);
 }
 
@@ -365,7 +365,7 @@ static inline size_t round_up(size_t size, size_t n) {
  * @param[in] alloc True if the block is allocated
  * @return The packed value
  */
-static inline word_t pack(size_t size, bool alloc, bool front_alloc) {
+static word_t pack(size_t size, bool alloc, bool front_alloc) {
   word_t word = size;
   if (alloc) {
     word |= alloc_mask;
@@ -385,7 +385,7 @@ static inline word_t pack(size_t size, bool alloc, bool front_alloc) {
  * @param[in] word
  * @return The size of the block represented by the word
  */
-static inline size_t extract_size(word_t word) { return (word & size_mask); }
+static size_t extract_size(word_t word) { return (word & size_mask); }
 
 /**
  * @brief Extracts the size of a block from its header.
@@ -402,7 +402,7 @@ static inline size_t get_size(block_t *block) {
  * @param block
  * @return void*
  */
-static inline void *get_body(block_t *block) { return (void *)&(block->body); }
+static void inline *get_body(block_t *block) { return (void *)&(block->body); }
 
 /**
  * @brief Given a payload pointer, returns a pointer to the corresponding
@@ -410,7 +410,7 @@ static inline void *get_body(block_t *block) { return (void *)&(block->body); }
  * @param[in] bp A pointer to a block's payload
  * @return The corresponding block
  */
-static inline block_t *payload_to_header(void *bp) {
+static block_t *payload_to_header(void *bp) {
   return (block_t *)((char *)bp - offsetof(block_t, body));
 }
 
@@ -420,9 +420,7 @@ static inline block_t *payload_to_header(void *bp) {
  * @param[in] block
  * @return A pointer to the block's payload
  */
-static inline void *header_to_payload(block_t *block) {
-  return get_body(block);
-}
+static void *header_to_payload(block_t *block) { return get_body(block); }
 
 /**
  * @brief Given a block pointer, returns a pointer to the corresponding
@@ -430,7 +428,7 @@ static inline void *header_to_payload(block_t *block) {
  * @param[in] block
  * @return A pointer to the block's footer
  */
-static inline word_t *header_to_footer(block_t *block) {
+static word_t *header_to_footer(block_t *block) {
   return (word_t *)((void *)block + get_size(block) - overhead_size);
 }
 
@@ -440,7 +438,7 @@ static inline word_t *header_to_footer(block_t *block) {
  * @param[in] footer A pointer to the block's footer
  * @return A pointer to the start of the block
  */
-static inline block_t *footer_to_header(word_t *footer) {
+static block_t *footer_to_header(word_t *footer) {
   size_t size = extract_size(*footer);
   return (block_t *)((char *)footer + wsize - size);
 }
@@ -454,7 +452,7 @@ static inline block_t *footer_to_header(word_t *footer) {
  * @param[in] block
  * @return The size of the block's payload
  */
-static inline size_t get_body_size(block_t *block) {
+static size_t get_body_size(block_t *block) {
   size_t asize = get_size(block);
   return asize - overhead_size;
 }
@@ -467,9 +465,7 @@ static inline size_t get_body_size(block_t *block) {
  * @param[in] word
  * @return The allocation status correpsonding to the word
  */
-static inline bool extract_alloc(word_t word) {
-  return (bool)(word & alloc_mask);
-}
+static bool extract_alloc(word_t word) { return (bool)(word & alloc_mask); }
 
 /**
  * @brief Returns the allocation status of the front block of a given header
@@ -480,7 +476,7 @@ static inline bool extract_alloc(word_t word) {
  * @param word
  * @return The allocation status correpsonding to the word
  */
-static inline bool extract_front_alloc(word_t word) {
+static bool extract_front_alloc(word_t word) {
   // 不等于0代表该Bit为1，前一个Block处于Alloc
   return (bool)((word & front_alloc_mask) != 0);
 }
@@ -490,9 +486,7 @@ static inline bool extract_front_alloc(word_t word) {
  * @param[in] block
  * @return The allocation status of the block
  */
-static inline bool get_alloc(block_t *block) {
-  return extract_alloc(block->header);
-}
+static bool get_alloc(block_t *block) { return extract_alloc(block->header); }
 
 /**
  * @brief Returns the allocation status of the front block of a block, based on
@@ -501,7 +495,7 @@ static inline bool get_alloc(block_t *block) {
  * @param block
  * @return Front block's allocation status of the block
  */
-static inline bool get_front_alloc(block_t *block) {
+static bool get_front_alloc(block_t *block) {
   return extract_front_alloc(block->header);
 }
 
@@ -605,7 +599,7 @@ static void write_block(block_t *block, size_t size, bool alloc,
  * @return The next consecutive block on the heap
  * @pre The block is not the epilogue
  */
-static inline block_t *find_next(block_t *block) {
+static block_t *find_next(block_t *block) {
   dbg_requires(block != NULL);
   dbg_requires(get_size(block) != 0);
   return (block_t *)((char *)block + get_size(block));
@@ -616,7 +610,7 @@ static inline block_t *find_next(block_t *block) {
  * @param[in] block A block in the heap
  * @return The location of the previous block's footer
  */
-static inline word_t *find_prev_footer(block_t *block) {
+static word_t *find_prev_footer(block_t *block) {
   // Compute previous footer position as one word before the header
   return &(block->header) - 1;
 }
@@ -634,7 +628,7 @@ static inline word_t *find_prev_footer(block_t *block) {
  * @return The previous consecutive block in the heap
  * @pre The block is not the first block in the heap
  */
-static inline block_t *find_prev(block_t *block) {
+static block_t *find_prev(block_t *block) {
   dbg_requires(block != NULL);
   dbg_requires(get_size(block) != 0);
 
@@ -933,9 +927,8 @@ static list_elem_t *remove_after(list_elem_t *block) {
  * @param index
  * @return list_elem_t*
  */
-static inline list_elem_t *get_list_by_index(uint8_t index) {
-  // TODO 优化为指针加法
-  return (list_elem_t *)&(list_table[index]);
+static list_elem_t *get_list_by_index(uint8_t index) {
+  return (list_elem_t *)(list_table + index);
 }
 
 /**
@@ -945,13 +938,9 @@ static inline list_elem_t *get_list_by_index(uint8_t index) {
  * @return uint8_t 合适的table index
  */
 static uint8_t deduce_list_index(size_t asize) {
-  if (asize > MAX_BLOCK_GROUP) {
-    return G_INF;
-  } else {
-    // 注意要在移4位之后再强转
-    dbg_assert((((uint8_t)(asize >> 4)) & group_mask) < 64);
-    return asize_to_index[((uint8_t)(asize >> 4)) & group_mask];
-  }
+  return asize > MAX_BLOCK_GROUP
+             ? G_INF
+             : asize_to_index[((uint8_t)(asize >> 4)) & group_mask];
 }
 
 /**
@@ -982,8 +971,8 @@ static bool cmp_back_is_block(block_t *block, block_t *curr) {
  * @return true
  * @return false
  */
-static inline bool cmp_insert_after_list_elem(list_elem_t *list_elem,
-                                              list_elem_t *curr) {
+static bool cmp_insert_after_list_elem(list_elem_t *list_elem,
+                                       list_elem_t *curr) {
   dbg_assert(list_elem != NULL);
   dbg_assert(curr != NULL);
   dbg_assert(curr < list_elem);

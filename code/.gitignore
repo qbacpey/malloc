@@ -1,6 +1,7 @@
 tput*
 .vscode\*
 *.o*
+*.svg
 *.bc
 mdriver
 mdriver-dbg
