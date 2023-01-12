@@ -134,8 +134,8 @@ static const word_t low_order_mask = (word_t)0xF;
  */
 static const word_t size_mask = ~(word_t)0xF;
 
-/** @brief 用于定位ASIZE中间六（0~63）位的掩码（需要先进行移动位置操作）*/
-static const uint8_t group_mask = 0x3F;
+/** @brief 用于定位ASIZE中间8（0~255）位的掩码（需要先进行移动位置操作）*/
+static const uint8_t group_mask = 0xFF;
 
 #define G_EMPTY 255
 #define G_32 0
@@ -145,11 +145,13 @@ static const uint8_t group_mask = 0x3F;
 #define G_256 4
 #define G_512 5
 #define G_1024 6
-#define G_INF 7
+#define G_2048 7
+#define G_4096 8
+#define G_INF 9
 
 /** @brief 如果ASIZE比这个数大，那么该Block就有多种不同大小的Block */
 #define MAX_SINGLE_BLOCK_GROUP 64
-#define MAX_BLOCK_GROUP 1024
+#define MAX_BLOCK_GROUP 4096
 
 /**
  * @brief ASIZE与list_table的INDEX之间映射的数组，
@@ -160,7 +162,7 @@ static const uint8_t group_mask = 0x3F;
  *       左移4位，再到数组中进行寻址
  *
  * @par 数组中各下标含有如下内容：
- * + 0：asize = 1024，为G_1024
+ * + 0：asize = 4096，为G_4096
  * + 1：无对应index，为G_EMPTY；
  * + 2：asize = 32，为G_32；
  * + 3：asize = 48，为G_48；
@@ -168,18 +170,44 @@ static const uint8_t group_mask = 0x3F;
  * + 5 ~ 8：asize = (64, 128]，为G_128；
  * + 9 ~ 16：asize = (128, 256]，为G_256；
  * + 17 ~ 32：asize = (256, 512]，为G_512；
- * + 33 ~ 63：asize = (512, 1024)，为G_1024；
+ * + 33 ~ 63：asize = (512, 1024]，为G_1024；
+ * + 64 ~ 127：asize = (1024, 2048]，为G_2048；
+ * + 128 ~ 255：asize = (2048, 4096)，为G_4096；
  *
  */
 static const uint8_t asize_to_index[] = {
-    G_1024, G_EMPTY, G_32,   G_48,   G_64,   G_128,  G_128,  G_128,
-    G_128,  G_256,   G_256,  G_256,  G_256,  G_256,  G_256,  G_256,
-    G_256,  G_512,   G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
-    G_512,  G_512,   G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
-    G_512,  G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
-    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
-    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
-    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024};
+    G_4096, G_EMPTY, G_32,   G_48,   G_64,   G_128,  G_128,  G_128,  G_128,
+    G_256,  G_256,   G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_512,
+    G_512,  G_512,   G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
+    G_512,  G_512,   G_512,  G_512,  G_512,  G_512,  G_1024, G_1024, G_1024,
+    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048,  G_2048, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096,  G_4096, G_4096};
+
+static const uint16_t index_to_asize[] = {32,  48,   64,   128, 256,
+                                          512, 1024, 2048, 4096};
 
 typedef struct list_elem {
   /** @brief 指向free list中后一个block的指针 */
@@ -234,8 +262,8 @@ typedef struct block {
    */
 } block_t;
 
-/** @brief 8个Segregate List */
-#define LIST_TABLE_SIZE 8
+/** @brief 10个Segregate List */
+#define LIST_TABLE_SIZE 10
 
 /**
  * @brief 堆第一个Block的起始位置，类型为block_t *，mem_heap_lo() + prologue
@@ -246,8 +274,6 @@ typedef struct block {
 #define HEAP_START (block_t *)(mem_heap_lo() + wsize)
 
 /* Global variables */
-
-static list_elem_t *list_table[LIST_TABLE_SIZE];
 
 /**
  * @brief free list头节点
@@ -269,7 +295,13 @@ static list_elem_t *list_table[LIST_TABLE_SIZE];
  *   END_OF_LIST
  *
  */
+static list_elem_t *list_table[LIST_TABLE_SIZE];
 
+/**
+ * @brief 用于表示对应链表是否为空
+ *
+ */
+static bool list_no_empty[LIST_TABLE_SIZE];
 /*
  *****************************************************************************
  * The functions below are short wrapper functions to perform                *
@@ -297,6 +329,7 @@ static bool valid_block_format(block_t *);
 static bool check_word_align_dword(word_t);
 static bool check_address_in_heap(word_t);
 static bool check_addr_is_root(list_elem_t *);
+static bool check_size_list(uint8_t, list_elem_t *);
 
 static inline list_elem_t *get_prev(list_elem_t *);
 static inline void set_prev(list_elem_t *, list_elem_t *);
@@ -312,8 +345,9 @@ static block_t *find_next(block_t *);
 static block_t *find_heap_by_cmp(block_t *, bool cmp(block_t *, block_t *));
 static list_elem_t *find_list_by_cmp(list_elem_t *, list_elem_t *,
                                      bool cmp(list_elem_t *, list_elem_t *));
-static bool cmp_back_is_block(block_t *block, block_t *curr);
-static bool cmp_insert_after_list_elem(list_elem_t *block, list_elem_t *curr);
+static inline bool cmp_back_is_block(block_t *block, block_t *curr);
+static inline bool cmp_insert_after_list_elem(list_elem_t *block,
+                                              list_elem_t *curr);
 
 /* Declaration end */
 
@@ -323,8 +357,8 @@ static bool cmp_insert_after_list_elem(list_elem_t *block, list_elem_t *curr);
  *
  */
 static const push_func_t index_to_push_func[] = {
-    push_front, push_front, push_front, push_order,
-    push_order, push_order, push_order, push_order};
+    push_front, push_front, push_front, push_order, push_order,
+    push_order, push_order, push_order, push_order, push_order};
 
 /**
  * @brief Returns the maximum of two integers.
@@ -793,7 +827,7 @@ static void insert_before(list_elem_t *curr, list_elem_t *back) {
  * @param new_head 将要被插入到ROOT所指向的链表的元素
  * @pre NEW_HEAD不可以是已分配的块
  */
-static void push_front(list_elem_t *root, list_elem_t *new_head) {
+static inline void push_front(list_elem_t *root, list_elem_t *new_head) {
   dbg_assert(root != NULL);
   dbg_assert(check_address_in_heap((word_t)root) == false);
 
@@ -868,11 +902,12 @@ static void remove_list_elem(list_elem_t *list_elem) {
  * @param list_elem
  */
 static void push_list(uint8_t table_index, list_elem_t *list_elem) {
-  dbg_assert(table_index < 8);
+  dbg_assert(table_index < LIST_TABLE_SIZE);
 
   list_elem_t *root = get_list_by_index(table_index);
   push_func_t push_func = index_to_push_func[table_index];
   push_func(root, list_elem);
+  list_no_empty[table_index] = true;
 }
 
 /**
@@ -927,7 +962,7 @@ static list_elem_t *remove_after(list_elem_t *block) {
  * @param index
  * @return list_elem_t*
  */
-static list_elem_t *get_list_by_index(uint8_t index) {
+static inline list_elem_t *get_list_by_index(uint8_t index) {
   return (list_elem_t *)(list_table + index);
 }
 
@@ -937,7 +972,7 @@ static list_elem_t *get_list_by_index(uint8_t index) {
  * @param asize 目标大小
  * @return uint8_t 合适的table index
  */
-static uint8_t deduce_list_index(size_t asize) {
+static inline uint8_t deduce_list_index(size_t asize) {
   return asize > MAX_BLOCK_GROUP
              ? G_INF
              : asize_to_index[((uint8_t)(asize >> 4)) & group_mask];
@@ -951,7 +986,7 @@ static uint8_t deduce_list_index(size_t asize) {
  * @return true
  * @return false
  */
-static bool cmp_back_is_block(block_t *block, block_t *curr) {
+static inline bool cmp_back_is_block(block_t *block, block_t *curr) {
   return find_next(curr) == block;
 }
 
@@ -971,8 +1006,8 @@ static bool cmp_back_is_block(block_t *block, block_t *curr) {
  * @return true
  * @return false
  */
-static bool cmp_insert_after_list_elem(list_elem_t *list_elem,
-                                       list_elem_t *curr) {
+static inline bool cmp_insert_after_list_elem(list_elem_t *list_elem,
+                                              list_elem_t *curr) {
   dbg_assert(list_elem != NULL);
   dbg_assert(curr != NULL);
   dbg_assert(curr < list_elem);
@@ -996,6 +1031,16 @@ static bool valid_list_iterate(bool aux(block_t *), size_t heap_count) {
     for (list_elem_t *curr = list_table[i]; curr != END_OF_LIST;
          curr = get_next(curr)) {
       list_count++;
+      // 检查链表大小是否适合
+      validation = check_size_list(i, curr);
+      if (!validation) {
+        dbg_printf("\n=============\n%d: Node size(%ld) do not match with list "
+                   "size(%d)\n=============\n",
+                   __LINE__, get_size(payload_to_header(curr)),
+                   index_to_asize[i]);
+        goto done;
+      }
+
       validation = aux(payload_to_header(curr));
       if (!validation) {
         dbg_printf("\n=============\n%d: Aux fail\n=============\n", __LINE__);
@@ -1253,6 +1298,37 @@ static bool check_node_ordered_with_next(list_elem_t *list_elem) {
 }
 
 /**
+ * @brief 检查LIST_ELEM是否位于INDEX所指示的链表中
+ *
+ * @param index
+ * @param list_elem
+ * @return true
+ * @return false
+ */
+static bool check_size_list(uint8_t index, list_elem_t *list_elem) {
+  dbg_ensures(index < 10);
+  switch (index) {
+  case G_32:
+  case G_48:
+  case G_64:
+    return get_size(payload_to_header(list_elem)) == index_to_asize[index];
+    break;
+  case G_128:
+  case G_256:
+  case G_512:
+  case G_1024:
+  case G_2048:
+  case G_4096:
+    return get_size(payload_to_header(list_elem)) <= index_to_asize[index] &&
+           get_size(payload_to_header(list_elem)) > index_to_asize[index - 1];
+  case G_INF:
+    return get_size(payload_to_header(list_elem)) > index_to_asize[index - 1];
+  default:
+    return false;
+  }
+}
+
+/**
  * @brief 检查BLOCK是否是一个合法的链表节点
  *
  * @param block
@@ -1389,7 +1465,7 @@ static block_t *coalesce_block(block_t *block) {
     } else {
       // Case 4 两边都已释放
       remove_list_elem(adj_front_list_elem);
-      remove_list_elem(adj_front_list_elem);
+      remove_list_elem(adj_back_list_elem);
       write_block(adj_front,
                   get_size(adj_front) + get_size(block) + get_size(adj_back),
                   false, true);
@@ -1516,13 +1592,26 @@ static block_t *find_first_fit(size_t asize) {
   block_t *block = NULL;
   uint8_t index = deduce_list_index(asize);
   for (int i = index; i < LIST_TABLE_SIZE; i++) {
-    for (list_elem = get_next(get_list_by_index(index));
-         list_elem != END_OF_LIST; list_elem = get_next(list_elem)) {
+    // 如果链表是空的直接跳过
+    if (list_no_empty[i] == false) {
+      continue;
+    }
+
+    // 由于再清理链表元素的时候不会更新对应链表空状态，因此这里需要检查一下
+    list_elem = get_next(get_list_by_index(i));
+    if (list_elem == END_OF_LIST) {
+      // 如果没有更新空状态，那么需要显式更新一下
+      list_no_empty[i] = true;
+      continue;
+    }
+
+    do {
       block = payload_to_header(list_elem);
       if (!(get_alloc(block)) && (asize <= get_size(block))) {
         return block;
       }
-    }
+      list_elem = get_next(list_elem);
+    } while (list_elem != END_OF_LIST);
   }
   return NULL; // no fit found
 }
@@ -1607,6 +1696,31 @@ bool mm_checkheap(int line) {
    */
 
   bool valid = false;
+
+  // 检查全局数组大小是否和LIST_TABLE_SIZE匹配
+  valid = (sizeof(index_to_push_func) / sizeof(index_to_push_func[0])) ==
+          LIST_TABLE_SIZE;
+  if (!valid) {
+    dbg_printf("\n=============\n%d: index_to_push_func size no equals to "
+               "LIST_TABLE_SIZE",
+               __LINE__);
+    goto done;
+  }
+  valid = (sizeof(list_table) / sizeof(list_table[0])) == LIST_TABLE_SIZE;
+  if (!valid) {
+    dbg_printf(
+        "\n=============\n%d: list_table size no equals to LIST_TABLE_SIZE",
+        __LINE__);
+    goto done;
+  }
+  valid = (sizeof(index_to_push_func) / sizeof(index_to_push_func[0])) ==
+          LIST_TABLE_SIZE;
+  if (!valid) {
+    dbg_printf("\n=============\n%d: index_to_push_func size no equals to "
+               "LIST_TABLE_SIZE",
+               __LINE__);
+    goto done;
+  }
 
   // 检查prologue block格式
   valid = check_tag(*find_prev_footer(HEAP_START), 0, true);
