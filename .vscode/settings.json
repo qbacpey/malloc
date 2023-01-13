@@ -1,0 +1,6 @@
+{
+    "C_Cpp.clang_format_fallbackStyle": "LLVM",
+    "C_Cpp.formatting": "clangFormat",
+    "C_Cpp.clang_format_style": "{ BasedOnStyle: LLVM, UseTab: Never, IndentWidth: 2, TabWidth: 4, BreakBeforeBracLinux, AllowShortIfStatementsOnASingleLine: false, IndentCaseLabels: false, ColumnLimit: 110, AccessModifierOffset: -4, NamespaceIndentation: All, FixNamespaceComments: false }",
+    "C_Cpp.clang_format_path": ""
+}

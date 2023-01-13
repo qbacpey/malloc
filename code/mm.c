@@ -86,6 +86,9 @@ typedef uint8_t byte_t;
 /** @brief 用于作为链表末尾的标识符，链表最后一个元素的next字段是这个东西 */
 #define END_OF_LIST ((void *)~0x0)
 
+/** @brief 一个Cluster中Cluster Block的数目 */
+#define CLUSTER_BLOCK_COUNT 6
+
 /** @brief Word and header size (bytes) */
 static const size_t wsize = sizeof(word_t);
 
@@ -114,14 +117,47 @@ static const size_t overhead_size = wsize;
 static const size_t chunksize = (1 << 12);
 
 /**
- * Header以及Footer的低位（0），用于计算当前Block是否被分配
+ * @brief cluster 整体的大小
+ *
+ */
+static const size_t cluster_size = 8 * dsize;
+
+/**
+ * @brief 一个cluster block的大小
+ *
+ */
+static const size_t cluster_block_size = dsize;
+
+static const size_t cluster_block_payload = dsize - 1;
+
+/**
+ * @brief get_body(block) + sizeof(list_elem_t)
+ *
+ */
+static const size_t cluster_header_size = 24;
+
+/**
+ * @brief Header以及Footer的低位（0），用于计算当前Block是否被分配
  */
 static const word_t alloc_mask = 0x1;
 
 /**
- * Header以及Footer的低位（1），用于计算当前Block之前的Block是否被分配
+ * @brief Header以及Footer的低位（1），用于计算当前Block之前的Block是否被分配
+ *
  */
 static const word_t front_alloc_mask = 0x2;
+
+/**
+ * @brief 低四位中第三位的掩码
+ *
+ */
+static const word_t cluster_mask = 0x4;
+
+/**
+ * @brief Cluster中六个Cluster Block的分配情况Bit
+ *
+ */
+static const word_t cluster_alloc_mask = 0x0000003F00000000;
 
 /**
  * @brief 由于地址是双字对齐的，因此低4位不会被用到
@@ -137,17 +173,39 @@ static const word_t size_mask = ~(word_t)0xF;
 /** @brief 用于定位ASIZE中间8（0~255）位的掩码（需要先进行移动位置操作）*/
 static const uint8_t group_mask = 0xFF;
 
+/** @brief 从Header的第五个Byte开始，每一个Bit对应一个Cluster Block的分配情况 */
+#define CLUSTER_B1 0x0000000100000000
+#define CLUSTER_B2 0x0000000200000000
+#define CLUSTER_B3 0x0000000400000000
+#define CLUSTER_B4 0x0000000800000000
+#define CLUSTER_B5 0x0000001000000000
+#define CLUSTER_B6 0x0000002000000000
+#define CLUSTER_FULL 6
+
+/** @brief 一个Cluster中有6个大小为16Byte的Cluster Block */
+static const word_t cluster_block_mask[CLUSTER_BLOCK_COUNT] = {
+    CLUSTER_B1, CLUSTER_B2, CLUSTER_B3, CLUSTER_B4, CLUSTER_B5, CLUSTER_B6};
+
+/** @brief cluster共有多少种不同的分配状态  */
+#define CLUSTER_ALLOC_STATUS 64
+/** @brief lookup table，用于快速找到一个6 Bit数中的第一个0的Index  */
+static const uint8_t cluster_alloc_to_num[CLUSTER_ALLOC_STATUS] = {
+    0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2,           0, 1,
+    0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1,           0, 2,
+    0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, CLUSTER_FULL};
+
 #define G_EMPTY 255
-#define G_32 0
-#define G_48 1
-#define G_64 2
-#define G_128 3
-#define G_256 4
-#define G_512 5
-#define G_1024 6
-#define G_2048 7
-#define G_4096 8
-#define G_INF 9
+#define G_16 0
+#define G_32 1
+#define G_48 2
+#define G_64 3
+#define G_128 4
+#define G_256 5
+#define G_512 6
+#define G_1024 7
+#define G_2048 8
+#define G_4096 9
+#define G_INF 10
 
 /** @brief 如果ASIZE比这个数大，那么该Block就有多种不同大小的Block */
 #define MAX_SINGLE_BLOCK_GROUP 64
@@ -163,7 +221,7 @@ static const uint8_t group_mask = 0xFF;
  *
  * @par 数组中各下标含有如下内容：
  * + 0：asize = 4096，为G_4096
- * + 1：无对应index，为G_EMPTY；
+ * + 1：asize = 16，为G_16；
  * + 2：asize = 32，为G_32；
  * + 3：asize = 48，为G_48；
  * + 4：asize = 64，为G_64；
@@ -176,38 +234,38 @@ static const uint8_t group_mask = 0xFF;
  *
  */
 static const uint8_t asize_to_index[] = {
-    G_4096, G_EMPTY, G_32,   G_48,   G_64,   G_128,  G_128,  G_128,  G_128,
-    G_256,  G_256,   G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_512,
-    G_512,  G_512,   G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
-    G_512,  G_512,   G_512,  G_512,  G_512,  G_512,  G_1024, G_1024, G_1024,
-    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
-    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
-    G_1024, G_1024,  G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
-    G_1024, G_1024,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048,  G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048,  G_2048, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
-    G_4096, G_4096,  G_4096, G_4096};
+    G_4096, G_16,   G_32,   G_48,   G_64,   G_128,  G_128,  G_128,  G_128,
+    G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_512,
+    G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
+    G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_1024, G_1024, G_1024,
+    G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
+    G_1024, G_1024, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_2048, G_2048, G_2048, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
+    G_4096, G_4096, G_4096, G_4096};
 
-static const uint16_t index_to_asize[] = {32,  48,   64,   128, 256,
-                                          512, 1024, 2048, 4096};
+static const uint16_t index_to_asize[] = {16,  32,  48,   64,   128,
+                                          256, 512, 1024, 2048, 4096};
 
 typedef struct list_elem {
   /** @brief 指向free list中后一个block的指针 */
@@ -262,8 +320,35 @@ typedef struct block {
    */
 } block_t;
 
-/** @brief 10个Segregate List */
-#define LIST_TABLE_SIZE 10
+/**
+ * @brief
+ * Minimum Block优化：
+ *  1. 添加了一个由16 Byte Block构成的集群链表:
+ *    1. 集群大小为128 Byte：
+ *      1. 集群Block的整体结构和普通Free
+ *         Block一样。头尾各自是Header和Footer，无论什么情况都不将它们移除。
+ *         Header第一个Byte的低4Bit和普通的Header一样，第三个Bit（cluster
+ * bit）会被置1用于表示集群， 只有内部的所有Implicit
+ * Block都被释放之后，Allocated Bit才被标记为1，其他规则和普通Block一致。
+ *         Header第五个Byte用于表示集群Block内部Implicit
+ * Block的分配情况，从最底位开始，一直到第六位。
+ *         Header的后面则是`list_elem_t`结构体，依然使用双向链表维护集群Block；
+ *       2. 除了32 Byte的Overhead，剩余的96 Byte由6个双字对齐的Implicit
+ * Block构成。 15 Byte的Payload后接1
+ * Byte的Header作为其所有内容，Header保存Block于集群内的编号；
+ *    2. LIFO维护，因此只需要实现链表头部插入函数即可；
+ *      1. 一旦释放了集群中的任意一个Block，都需要将集群推入链表头部
+ *    3.移除元素有两种情况：
+ *      1.分配Block时，只有当集群中没有空Block时才将集群Block从根节点中移除，否则只是操作集群Header
+ *         同时，初次在集群内部分配Block时要将集群的allocated bit设置为1；
+ *      2.合并Block的时候可能要将集群从链表中移除，只有当allocated
+ * bit=0（无任何分配Block）时才可合并 合并时需要检查cluster bit，将其当成128
+ * Byte的Block合并；
+ *
+ */
+
+/** @brief 11个Segregate List */
+#define LIST_TABLE_SIZE 11
 
 /**
  * @brief 堆第一个Block的起始位置，类型为block_t *，mem_heap_lo() + prologue
@@ -356,7 +441,7 @@ static inline bool cmp_insert_after_list_elem(list_elem_t *block,
  *        除了32、48、64都需要维护address order
  *
  */
-static const push_func_t index_to_push_func[] = {
+static const push_func_t index_to_push_func[LIST_TABLE_SIZE] = {
     push_front, push_front, push_front, push_order, push_order,
     push_order, push_order, push_order, push_order, push_order};
 
@@ -399,7 +484,7 @@ static size_t round_up(size_t size, size_t n) {
  * @param[in] alloc True if the block is allocated
  * @return The packed value
  */
-static word_t pack(size_t size, bool alloc, bool front_alloc) {
+static inline word_t pack_regular(size_t size, bool alloc, bool front_alloc) {
   word_t word = size;
   if (alloc) {
     word |= alloc_mask;
@@ -408,6 +493,22 @@ static word_t pack(size_t size, bool alloc, bool front_alloc) {
     word |= front_alloc_mask;
   }
   return word;
+}
+
+/**
+ * @brief 同上，只不过会在此函数专用于写入cluster block
+ *
+ * @param alloc 同pack_regular
+ * @param front_alloc 同pack_regular
+ * @param cluster 用于判断是否需要置cluster bit
+ * @return word_t
+ */
+static inline word_t pack_cluster(bool alloc, bool front_alloc, bool cluster) {
+  word_t word = cluster_block_size;
+  if (cluster) {
+    word |= cluster_mask;
+  }
+  return pack_regular((size_t)word, alloc, front_alloc);
 }
 
 /**
@@ -516,6 +617,18 @@ static bool extract_front_alloc(word_t word) {
 }
 
 /**
+ * @brief Returns weather the header is a cluster block header.
+ *
+ * This is based on the third lowest bit of the header value.
+ *
+ * @param word
+ * @return bool
+ */
+static bool extract_cluster(word_t word) {
+  return (bool)((word & cluster_mask) != 0);
+}
+
+/**
  * @brief Returns the allocation status of a block, based on its header.
  * @param[in] block
  * @return The allocation status of the block
@@ -531,6 +644,85 @@ static bool get_alloc(block_t *block) { return extract_alloc(block->header); }
  */
 static bool get_front_alloc(block_t *block) {
   return extract_front_alloc(block->header);
+}
+
+/**
+ * @brief Returns whether the block is a cluster block.
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool get_cluster(block_t *block) {
+  return extract_cluster(block->header);
+}
+
+/**
+ * @brief 获取Cluster的第五个Byte，也就是用于标识Cluster Block分配情况的那一Byte
+ *
+ * @param block
+ * @return uint8_t
+ */
+static uint8_t get_cluster_alloc(block_t *block) {
+  dbg_assert(get_cluster(block) == true);
+  return (block->header & cluster_alloc_mask) >> 32;
+}
+
+/**
+ * @brief Get the NUM cluster block alloc state of BLOCK
+ *
+ * @param block
+ * @param num Cluster Block在BLOCK中的编号
+ * @return true
+ * @return false
+ */
+static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
+  dbg_assert(get_cluster(block) == true);
+  dbg_assert(num < CLUSTER_BLOCK_COUNT);
+  return block->header & cluster_block_mask[num] != 0 ? true : false;
+}
+
+/**
+ * @brief 判断BLOCK中是否有任何Cluster block已分配
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool deduce_cluster_empty(block_t *block) {
+  dbg_assert(get_cluster(block) == true);
+
+  return block->header & cluster_alloc_mask == 0 ? true : false;
+}
+
+/**
+ * @brief 判断BLOCK中是否所有Cluster block已分配
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool deduce_cluster_full(block_t *block) {
+  dbg_assert(get_cluster(block) == true);
+
+  return block->header & cluster_alloc_mask == cluster_alloc_mask ? true
+                                                                  : false;
+}
+
+/**
+ * @brief Set the alloc state of the NUM cluster block of BLOCK to ALLOC
+ *
+ * @param block
+ * @param num 需要改变allocated bit的cluster block的标号
+ * @param alloc 新的分配状态
+ */
+static void set_cluster_block_alloc(block_t *block, uint8_t num, bool alloc) {
+  dbg_assert(get_cluster(block) == true);
+  dbg_assert(num < CLUSTER_BLOCK_COUNT);
+  if (alloc)
+    block->header |= cluster_block_mask[num];
+  else
+    block->header &= ~(cluster_block_mask[num]);
 }
 
 /**
@@ -571,6 +763,8 @@ static void dbg_print_block(block_t *block) {
   printf("Block alloc:\t\t %s\n", get_alloc(block) == true ? "true" : "false");
   printf("Block front alloc:\t %s\n",
          get_front_alloc(block) == true ? "true" : "false");
+  printf("Block is a cluster:\t %s\n",
+         get_cluster(block) == true ? "true" : "false");
 }
 
 /**
@@ -585,7 +779,7 @@ static void write_epilogue(block_t *block, bool front_alloc) {
   dbg_requires(block != NULL);
   dbg_requires((char *)block == mem_heap_hi() - 7);
 
-  block->header = pack(0, true, front_alloc);
+  block->header = pack_regular(0, true, front_alloc);
 }
 
 /**
@@ -615,11 +809,152 @@ static void write_block(block_t *block, size_t size, bool alloc,
   dbg_requires(size >= min_block_size);
   dbg_requires(check_word_align_dword((word_t)size));
 
-  block->header = pack(size, alloc, front_alloc);
+  block->header = pack_regular(size, alloc, front_alloc);
   // 只有Free block才有footer
   if (!alloc) {
     word_t *footerp = header_to_footer(block);
-    *footerp = pack(size, alloc, front_alloc);
+    *footerp = pack_regular(size, alloc, front_alloc);
+  }
+}
+
+/**
+ * @brief 在指定位置创建一个cluster
+ *
+ * @param block
+ * @param size
+ * @param alloc
+ * @param front_alloc
+ */
+static void create_cluster(block_t *block, bool front_alloc) {
+  write_block(block, cluster_block_size, false, front_alloc);
+
+  // 计算第一个cluster的位置
+  uint8_t *cluster_blocks = (uint8_t *)block + cluster_header_size;
+  dbg_assert(cluster_blocks == get_body(block) + sizeof(list_elem_t));
+
+  uint8_t num = 0;
+  // 设置每一个cluster block的最后一个Byte为对应编号
+  for (int i = cluster_block_size - 1; i != cluster_size;
+       i += cluster_block_size) {
+    cluster_blocks[i] = num;
+    num++;
+  }
+  dbg_assert(num == CLUSTER_BLOCK_COUNT - 1);
+}
+
+/**
+ * @brief 获取BLOCK的第NUM个Cluster Block
+ *
+ * @param block
+ * @param num
+ * @return void*
+ */
+static inline void *get_cluster_block(block_t *block, uint8_t num) {
+  dbg_requires(block != NULL);
+  dbg_assert(get_cluster(block) == true);
+  dbg_assert(num < CLUSTER_BLOCK_COUNT);
+
+  return (uint16_t *)((void *)block + cluster_header_size) + num;
+}
+
+/**
+ * @brief 利用CLUSTER_BLOCK的地址以及它的编号（NUM）推断出其所在Cluster的位置
+ *
+ * @param block
+ * @param num
+ * @return block_t*
+ */
+static inline block_t *get_cluster_by_cluster_block(void *cluster_block,
+                                                    uint8_t num) {
+  dbg_assert(check_word_align_dword((word_t)cluster_block));
+  dbg_assert(num < CLUSTER_BLOCK_COUNT);
+  return (block_t *)(cluster_block - num * cluster_block_size -
+                     cluster_header_size);
+}
+
+/**
+ * @brief 获取指定Cluster Block的标号
+ *
+ * @param cluster_block
+ * @return uint8_t
+ */
+static inline uint8_t get_cluster_block_number(void *cluster_block) {
+  uint8_t result = *((uint8_t *)cluster_block + cluster_block_payload);
+  dbg_ensures(result < CLUSTER_BLOCK_COUNT);
+  return result;
+}
+
+/**
+ * @brief 获取Block中的第一个未使用的Cluster Block的编号
+ *
+ * @param block
+ * @return uint8_t
+ */
+static uint8_t get_free_cluster_block(block_t *block) {
+  word_t alloc_field = get_cluster_alloc(block->header);
+  dbg_ensures(alloc_field < CLUSTER_ALLOC_STATUS);
+  uint8_t num = cluster_alloc_to_num[alloc_field];
+  dbg_ensures(num == CLUSTER_FULL ||
+              get_cluster_block_alloc(block, num) == false);
+  return num;
+}
+
+/**
+ * @brief 在分配BLOCK中分配一个Cluster Block，将该Block的地址返回
+ *
+ * @param block
+ * @param num
+ * @return void* 如果Cluster中所有Cluster都已分配，返回NULL
+ */
+static void *allocate_cluster_block(block_t *block) {
+  dbg_requires(block != NULL);
+  dbg_assert(get_cluster(block) == true);
+  dbg_assert(deduce_cluster_full(block) == false);
+
+  uint8_t num = get_free_cluster_block(block);
+  dbg_ensures(num != CLUSTER_FULL);
+
+  set_cluster_block_alloc(block->header, num, true);
+  if (deduce_cluster_full(block)) {
+    // 将Block中链表中移除
+    remove_list_elem(block);
+  } else if (!get_alloc(block)) {
+    // 如果没有设置alloc bit，那么需要设置alloc bit
+    block->header |= alloc_mask;
+    *(word_t *)((void *)block + 120) |= alloc_mask;
+    set_front_alloc((word_t *)block + cluster_block_size, true);
+  }
+  void *result = get_cluster_block(block, num);
+  dbg_ensures(num != CLUSTER_FULL);
+  dbg_ensures(get_cluster_block_number(result) != num);
+  return result;
+}
+
+/**
+ * @brief 释放BLOCK中编号为NUM的Cluster Block
+ *
+ * @param block
+ * @param num
+ */
+static void free_cluster_block(void *cluster_block) {
+  dbg_requires(cluster_block != NULL);
+  uint8_t num = get_cluster_block_number(cluster_block);
+  dbg_ensures(num < CLUSTER_BLOCK_COUNT);
+  block_t *cluster = get_cluster_by_cluster_block(cluster_block, num);
+  // TODO 需要更改实现，要能够验证Cluster的正确性 dbg_ensures(valid_block_format(cluster));
+
+  if(deduce_cluster_full(cluster)){
+  // 链表由满变非空，需要将其加入链表中
+    set_cluster_block_alloc(cluster->header, num, false);
+    push_front(list_table[0] , cluster);
+  } else{
+    set_cluster_block_alloc(cluster->header, num, false);
+    // 链表变为空，需要设置alloc bit
+    if(deduce_cluster_empty(cluster)){
+    cluster->header |= ^alloc_mask;
+    *(word_t *)((void *)cluster + 120) |= alloc_mask;
+    set_front_alloc((word_t *)cluster + cluster_block_size, false);
+    }
   }
 }
 
@@ -1800,8 +2135,8 @@ bool mm_init(void) {
    * 主要的目的是用来标识堆的边界
    */
 
-  start[0] = pack(0, true, true); // Heap prologue (block footer)
-  start[1] = pack(0, true, true); // Heap epilogue (block header)
+  start[0] = pack_regular(0, true, true); // Heap prologue (block footer)
+  start[1] = pack_regular(0, true, true); // Heap epilogue (block header)
 
   // 将各segregate list指针从NULL显式初始化为END_OF_LIST
   for (int i = 0; i != LIST_TABLE_SIZE; i++)
