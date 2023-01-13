@@ -127,8 +127,11 @@ static const size_t cluster_size = 8 * dsize;
  *
  */
 static const size_t cluster_block_size = dsize;
-
-static const size_t cluster_block_payload = dsize - 1;
+/**
+ * @brief 一个cluster block的大小
+ *
+ */
+static const size_t cluster_block_payload_size = wsize;
 
 /**
  * @brief get_body(block) + sizeof(list_elem_t)
@@ -152,6 +155,12 @@ static const word_t front_alloc_mask = 0x2;
  *
  */
 static const word_t cluster_mask = 0x4;
+
+/**
+ * @brief 低四位中第四位的掩码
+ *
+ */
+static const word_t cluster_block_mask = 0x8;
 
 /**
  * @brief Cluster中六个Cluster Block的分配情况Bit
@@ -183,13 +192,13 @@ static const uint8_t group_mask = 0xFF;
 #define CLUSTER_FULL 6
 
 /** @brief 一个Cluster中有6个大小为16Byte的Cluster Block */
-static const word_t cluster_block_mask[CLUSTER_BLOCK_COUNT] = {
+static const word_t cluster_block_alloc_mask_table[CLUSTER_BLOCK_COUNT] = {
     CLUSTER_B1, CLUSTER_B2, CLUSTER_B3, CLUSTER_B4, CLUSTER_B5, CLUSTER_B6};
 
 /** @brief cluster共有多少种不同的分配状态  */
 #define CLUSTER_ALLOC_STATUS 64
 /** @brief lookup table，用于快速找到一个6 Bit数中的第一个0的Index  */
-static const uint8_t cluster_alloc_to_num[CLUSTER_ALLOC_STATUS] = {
+static const uint8_t cluster_alloc_to_num[] = {
     0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2,           0, 1,
     0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1,           0, 2,
     0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, CLUSTER_FULL};
@@ -264,7 +273,7 @@ static const uint8_t asize_to_index[] = {
     G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
     G_4096, G_4096, G_4096, G_4096};
 
-static const uint16_t index_to_asize[] = {16,  32,  48,   64,   128,
+static const uint16_t index_to_asize[] = {128,  32,  48,   64,   128,
                                           256, 512, 1024, 2048, 4096};
 
 typedef struct list_elem {
@@ -441,8 +450,8 @@ static inline bool cmp_insert_after_list_elem(list_elem_t *block,
  *        除了32、48、64都需要维护address order
  *
  */
-static const push_func_t index_to_push_func[LIST_TABLE_SIZE] = {
-    push_front, push_front, push_front, push_order, push_order,
+static const push_func_t index_to_push_func[] = {
+    push_front, push_front, push_front, push_order, push_order, push_order,
     push_order, push_order, push_order, push_order, push_order};
 
 /**
@@ -496,18 +505,16 @@ static inline word_t pack_regular(size_t size, bool alloc, bool front_alloc) {
 }
 
 /**
- * @brief 同上，只不过会在此函数专用于写入cluster block
+ * @brief 同上，只不过会在此函数专用于写入cluster
  *
  * @param alloc 同pack_regular
  * @param front_alloc 同pack_regular
  * @param cluster 用于判断是否需要置cluster bit
  * @return word_t
  */
-static inline word_t pack_cluster(bool alloc, bool front_alloc, bool cluster) {
+static inline word_t pack_cluster(bool alloc, bool front_alloc) {
   word_t word = cluster_block_size;
-  if (cluster) {
-    word |= cluster_mask;
-  }
+  word |= cluster_mask;
   return pack_regular((size_t)word, alloc, front_alloc);
 }
 
@@ -629,6 +636,15 @@ static bool extract_cluster(word_t word) {
 }
 
 /**
+ * @brief Set the cluster bit of WORD to 1
+ *
+ * @param word
+ * @return true
+ * @return false
+ */
+static void set_cluster(word_t *word) { *word |= cluster_mask; }
+
+/**
  * @brief Returns the allocation status of a block, based on its header.
  * @param[in] block
  * @return The allocation status of the block
@@ -658,14 +674,25 @@ static bool get_cluster(block_t *block) {
 }
 
 /**
- * @brief 获取Cluster的第五个Byte，也就是用于标识Cluster Block分配情况的那一Byte
+ * @brief 获取BLOCK的alloc字段（即Cluster的第四个word）
+ * 
+ * @param block 
+ * @return word_t 
+ */
+static word_t* get_cluster_alloc_field(block_t *block){
+  return (word_t *)block + 3;
+}
+
+/**
+ * @brief 获取Cluster Footers的第五个Byte，也就是用于标识Cluster
+ * Block分配情况的那一Byte
  *
  * @param block
  * @return uint8_t
  */
 static uint8_t get_cluster_alloc(block_t *block) {
   dbg_assert(get_cluster(block) == true);
-  return (block->header & cluster_alloc_mask) >> 32;
+  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) >> 32;
 }
 
 /**
@@ -679,7 +706,11 @@ static uint8_t get_cluster_alloc(block_t *block) {
 static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
   dbg_assert(get_cluster(block) == true);
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
-  return block->header & cluster_block_mask[num] != 0 ? true : false;
+
+  return ((*get_cluster_alloc_field(block)) & (cluster_block_alloc_mask_table[num])) !=
+                 0
+             ? true
+             : false;
 }
 
 /**
@@ -692,7 +723,7 @@ static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
 static bool deduce_cluster_empty(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return block->header & cluster_alloc_mask == 0 ? true : false;
+  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) == 0 ? true : false;
 }
 
 /**
@@ -705,8 +736,9 @@ static bool deduce_cluster_empty(block_t *block) {
 static bool deduce_cluster_full(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return block->header & cluster_alloc_mask == cluster_alloc_mask ? true
-                                                                  : false;
+  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) == cluster_alloc_mask
+             ? true
+             : false;
 }
 
 /**
@@ -720,9 +752,9 @@ static void set_cluster_block_alloc(block_t *block, uint8_t num, bool alloc) {
   dbg_assert(get_cluster(block) == true);
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
   if (alloc)
-    block->header |= cluster_block_mask[num];
+    *get_cluster_alloc_field(block) |= cluster_block_alloc_mask_table[num];
   else
-    block->header &= ~(cluster_block_mask[num]);
+    *get_cluster_alloc_field(block) &= ~(cluster_block_alloc_mask_table[num]);
 }
 
 /**
@@ -756,15 +788,26 @@ static void set_front_alloc_of_back_block(block_t *block, bool front_alloc) {
  * @param block
  */
 static void dbg_print_block(block_t *block) {
-  dbg_printf("\nBlock address:\t\t %p\n", block);
-  dbg_printf("Block header:\t\t 0x%09lx\n", block->header);
-  dbg_printf("Block footer:\t\t 0x%09lx\n", *header_to_footer(block));
-  dbg_printf("Block Size:\t\t %ld\n", get_size(block));
-  printf("Block alloc:\t\t %s\n", get_alloc(block) == true ? "true" : "false");
-  printf("Block front alloc:\t %s\n",
+  dbg_printf("\nBlock address:\t\t\t %p\n", block);
+  dbg_printf("Block header:\t\t\t 0x%09lx\n", block->header);
+  dbg_printf("Block footer:\t\t\t 0x%09lx\n", *header_to_footer(block));
+  dbg_printf("Block Size:\t\t\t %ld\n", get_size(block));
+  printf("Block alloc:\t\t\t %s\n",
+         get_alloc(block) == true ? "true" : "false");
+  printf("Block front alloc:\t\t %s\n",
          get_front_alloc(block) == true ? "true" : "false");
-  printf("Block is a cluster:\t %s\n",
+  printf("Block is a cluster:\t\t %s\n",
          get_cluster(block) == true ? "true" : "false");
+  if (get_cluster(block)) {
+    printf("Cluster status:\t\t\t %s\n",
+           deduce_cluster_empty(block)
+               ? "empty"
+               : deduce_cluster_full(block) ? "full" : "no empty");
+    for (uint8_t i = 0; i != CLUSTER_BLOCK_COUNT; i++) {
+      printf("Cluster Block %d alloc:\t\t %s\n", i,
+             get_cluster_block_alloc(block, i) == true ? "true" : "false");
+    }
+  }
 }
 
 /**
@@ -818,28 +861,31 @@ static void write_block(block_t *block, size_t size, bool alloc,
 }
 
 /**
- * @brief 在指定位置创建一个cluster
+ * @brief 在BLOCK上创建一个Cluster
+ *
+ * @note BLOCK的大小必须是128 Byte且已分配并不位于任何表中
  *
  * @param block
  * @param size
  * @param alloc
  * @param front_alloc
  */
-static void create_cluster(block_t *block, bool front_alloc) {
-  write_block(block, cluster_block_size, false, front_alloc);
-
-  // 计算第一个cluster的位置
-  uint8_t *cluster_blocks = (uint8_t *)block + cluster_header_size;
-  dbg_assert(cluster_blocks == get_body(block) + sizeof(list_elem_t));
+static void create_cluster(block_t *block) {
+  dbg_assert(get_size(block) == cluster_size);
+  dbg_assert(get_alloc(block));
+  dbg_ensures(valid_block_format(block));
+  // 设置Cluster Bit
+  set_cluster((word_t *)block);
+  set_cluster((word_t *)block + 4);
 
   uint8_t num = 0;
-  // 设置每一个cluster block的最后一个Byte为对应编号
-  for (int i = cluster_block_size - 1; i != cluster_size;
-       i += cluster_block_size) {
-    cluster_blocks[i] = num;
+  // 设置每一个cluster block的第2个半字为对应编号
+  for (uint8_t *p = get_cluster_block(block, 0);
+       num != CLUSTER_BLOCK_COUNT; p += cluster_block_size) {
+    p[4] = num;
+    *p |= (uint8_t)cluster_block_mask;
     num++;
   }
-  dbg_assert(num == CLUSTER_BLOCK_COUNT - 1);
 }
 
 /**
@@ -853,8 +899,9 @@ static inline void *get_cluster_block(block_t *block, uint8_t num) {
   dbg_requires(block != NULL);
   dbg_assert(get_cluster(block) == true);
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
-
-  return (uint16_t *)((void *)block + cluster_header_size) + num;
+  // 注意，每一个Cluster Block都有自己的Header
+  return (uint16_t *)((void *)block + min_block_size + overhead_size) +
+         num;
 }
 
 /**
@@ -868,8 +915,7 @@ static inline block_t *get_cluster_by_cluster_block(void *cluster_block,
                                                     uint8_t num) {
   dbg_assert(check_word_align_dword((word_t)cluster_block));
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
-  return (block_t *)(cluster_block - num * cluster_block_size -
-                     cluster_header_size);
+  return (block_t *)(cluster_block - overhead_size - num * cluster_block_size - min_block_size);
 }
 
 /**
@@ -879,7 +925,7 @@ static inline block_t *get_cluster_by_cluster_block(void *cluster_block,
  * @return uint8_t
  */
 static inline uint8_t get_cluster_block_number(void *cluster_block) {
-  uint8_t result = *((uint8_t *)cluster_block + cluster_block_payload);
+  uint8_t result = ((uint8_t *)cluster_block)[4];
   dbg_ensures(result < CLUSTER_BLOCK_COUNT);
   return result;
 }
@@ -891,7 +937,7 @@ static inline uint8_t get_cluster_block_number(void *cluster_block) {
  * @return uint8_t
  */
 static uint8_t get_free_cluster_block(block_t *block) {
-  word_t alloc_field = get_cluster_alloc(block->header);
+  word_t alloc_field = get_cluster_alloc(block);
   dbg_ensures(alloc_field < CLUSTER_ALLOC_STATUS);
   uint8_t num = cluster_alloc_to_num[alloc_field];
   dbg_ensures(num == CLUSTER_FULL ||
@@ -914,19 +960,18 @@ static void *allocate_cluster_block(block_t *block) {
   uint8_t num = get_free_cluster_block(block);
   dbg_ensures(num != CLUSTER_FULL);
 
-  set_cluster_block_alloc(block->header, num, true);
+  set_cluster_block_alloc(block, num, true);
   if (deduce_cluster_full(block)) {
     // 将Block中链表中移除
-    remove_list_elem(block);
+    remove_list_elem(get_body(block));
   } else if (!get_alloc(block)) {
     // 如果没有设置alloc bit，那么需要设置alloc bit
-    block->header |= alloc_mask;
-    *(word_t *)((void *)block + 120) |= alloc_mask;
-    set_front_alloc((word_t *)block + cluster_block_size, true);
+    block->header = pack_cluster(true, get_front_alloc(block));
+    set_front_alloc_of_back_block(block, true);
   }
   void *result = get_cluster_block(block, num);
   dbg_ensures(num != CLUSTER_FULL);
-  dbg_ensures(get_cluster_block_number(result) != num);
+  dbg_ensures(get_cluster_block_number(result) == num);
   return result;
 }
 
@@ -941,19 +986,19 @@ static void free_cluster_block(void *cluster_block) {
   uint8_t num = get_cluster_block_number(cluster_block);
   dbg_ensures(num < CLUSTER_BLOCK_COUNT);
   block_t *cluster = get_cluster_by_cluster_block(cluster_block, num);
-  // TODO 需要更改实现，要能够验证Cluster的正确性 dbg_ensures(valid_block_format(cluster));
+  dbg_ensures(valid_block_format(cluster));
 
-  if(deduce_cluster_full(cluster)){
-  // 链表由满变非空，需要将其加入链表中
-    set_cluster_block_alloc(cluster->header, num, false);
-    push_front(list_table[0] , cluster);
-  } else{
-    set_cluster_block_alloc(cluster->header, num, false);
+  if (deduce_cluster_full(cluster)) {
+    // 链表由满变非空，需要将其加入链表中
+    set_cluster_block_alloc(cluster, num, false);
+    push_front(list_table[0], get_body(cluster));
+  } else {
+    set_cluster_block_alloc(cluster, num, false);
     // 链表变为空，需要设置alloc bit
-    if(deduce_cluster_empty(cluster)){
-    cluster->header |= ^alloc_mask;
-    *(word_t *)((void *)cluster + 120) |= alloc_mask;
-    set_front_alloc((word_t *)cluster + cluster_block_size, false);
+    if (deduce_cluster_empty(cluster)) {
+      cluster->header = pack_cluster(false, get_front_alloc(cluster));
+      *header_to_footer(cluster) |= (alloc_mask | cluster_mask);
+      set_front_alloc_of_back_block(cluster, true);
     }
   }
 }
@@ -1113,8 +1158,9 @@ static void insert_after(list_elem_t *front, list_elem_t *curr) {
   // dbg_assert(check_free_block_aux(payload_to_header(front)) == true);
   dbg_assert(curr != NULL);
   dbg_assert(get_size(payload_to_header(curr)) != 0);
-  dbg_assert(get_alloc(payload_to_header(curr)) == false);
-  dbg_assert(valid_block_format(payload_to_header(curr)) == true);
+  dbg_assert(get_cluster(payload_to_header(curr)) ||
+             !get_alloc(payload_to_header(curr)));
+  dbg_assert(valid_block_format(payload_to_header(curr)));
 
   set_next(curr, get_next(front)); // curr->next = front->next;
   set_prev(curr, front);           // curr->prev = front;
@@ -1486,6 +1532,64 @@ static bool check_tags_match(block_t *block) {
 }
 
 /**
+ * @brief 检查Cluster的大小是否为128 Byte
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool check_cluster_size(block_t *block) {
+  return get_size(block) == cluster_size;
+}
+
+/**
+ * @brief 检查Cluster的Header和Footer的alloc bit和cluster bit是否匹配
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool check_cluster_tag(block_t *block) {
+  const static word_t low_four_bit_mask = 0x5;
+  return (block->header & low_four_bit_mask) ==
+         (*header_to_footer(block) & low_four_bit_mask);
+}
+
+/**
+ * @brief 检查各Cluster Block编号是否正确
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool check_cluster_block_num(block_t *block) {
+  uint8_t i = 0;
+  for (uint8_t *p = (void *)block + cluster_header_size;
+       i != CLUSTER_BLOCK_COUNT; p += cluster_block_size) {
+    if (i != p[4]) {
+      dbg_printf("i: %d, p[4]: %d\n", i, p[4]);
+      return false;
+    }
+    i++;
+  }
+  return true;
+}
+
+/**
+ * @brief 检查Cluster中分配情况是否和alloc bit情况匹配
+ *
+ * @param block
+ * @return true
+ * @return false
+ */
+static bool check_cluster_alloc_bit(block_t *block) {
+  if (get_alloc(block)) {
+    return !deduce_cluster_empty(block);
+  }
+  return true;
+}
+
+/**
  * @brief 调用其他函数，总体检查BLOCK的格式
  *
  * @param block
@@ -1508,6 +1612,39 @@ static bool valid_block_format(block_t *block) {
     validation = check_tags_match(block);
     if (!validation) {
       dbg_printf("\n=============\n%d: block header & footer not match\n",
+                 __LINE__);
+      goto done;
+    }
+  }
+
+  if (get_cluster(block)) {
+    validation = check_cluster_size(block);
+    if (!validation) {
+      dbg_printf(
+          "\n=============\n%d: Cluster block size no equals with 128 Byte\n",
+          __LINE__);
+      goto done;
+    }
+    if (!get_alloc(block)) {
+      validation = check_cluster_tag(block);
+      if (!validation) {
+        dbg_printf("\n=============\n%d: Cluster header & footer no match with "
+                   "each other\n",
+                   __LINE__);
+        goto done;
+      }
+    }
+
+    validation = check_cluster_block_num(block);
+    if (!validation) {
+      dbg_printf("\n=============\n%d: Cluster block number interrupted\n",
+                 __LINE__);
+      goto done;
+    }
+
+    validation = check_cluster_alloc_bit(block);
+    if (!validation) {
+      dbg_printf("\n=============\n%d: Cluster allocated state interrupted\n",
                  __LINE__);
       goto done;
     }
@@ -1585,8 +1722,6 @@ static bool check_match_with_front(list_elem_t *list_elem) {
  * @brief
  * 检查自己的prev字段指向的节点的next是否指向自己，如果prev为空直接返回true
  *
- * TODO  prev的地址检查需要修改
- *
  * @param list_elem
  * @return true
  * @return false
@@ -1597,8 +1732,6 @@ static bool check_match_with_back(list_elem_t *list_elem) {
 
 /**
  * @brief 检查LIST_ELEM的prev是否合法的地址
- *
- * TODO prev的地址检查需要修改
  *
  * @param list_elem
  * @return true
@@ -1641,8 +1774,12 @@ static bool check_node_ordered_with_next(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_size_list(uint8_t index, list_elem_t *list_elem) {
-  dbg_ensures(index < 10);
+  dbg_ensures(index < LIST_TABLE_SIZE);
+
   switch (index) {
+  case G_16:
+    return get_size(payload_to_header(list_elem)) == index_to_asize[index];
+    break;
   case G_32:
   case G_48:
   case G_64:
@@ -1880,7 +2017,7 @@ static block_t *extend_heap(size_t size) {
  * @pre block必须已分配
  */
 static void split_block(block_t *block, size_t asize) {
-  dbg_requires(get_alloc(block) == true);
+  dbg_requires(get_alloc(block));
   dbg_requires(asize <= get_size(block));
   dbg_requires(check_word_align_dword((word_t)asize));
   /* TODO: Can you write a precondition about the value of asize? */
@@ -1915,18 +2052,60 @@ static void split_block(block_t *block, size_t asize) {
 }
 
 /**
- * @brief 遍历INDEX对应的链表，寻找第一个大小大于等于ASIZE的块
+ * @brief 遍历INDEX对应的链表，寻找大小等于ASIZE或大于等于ASIZE + 32的块
  *
- * @par first fit
+ * @par 扫描算法分为两个部分：
+ * 1. 第一部分是在index对应链表中进行扫描，利用Best Fit算法，过程中
+ *    如果遇到大小恰好为ASIZE的Block会立刻返回，如果遇到大于等于ssize
+ *    的块则会将其记录。
+ *
+ *    如果一直到队列末尾都没有遇到大小相等的Block，同时有记录到ssize块的话
+ *    那么会将该块返回，否则进入下一部分；
+ *
+ * 2. 第二部分的流程为First fit，需要使用ssize获取新的list table index，
+ *    找到对应链表中第一个大于或等于ASIZE的Block并将其返回；
+ *
+ * 这一算法可有效减少内存的Internal Fragmentation现象
  *
  * @param[in] asize 目标大小
  * @return 块的地址，如果没有找到则是NULL
  */
-static block_t *find_first_fit(size_t asize) {
+static block_t *find_fit(size_t asize) {
+  dbg_assert(asize >= 32);
+
   list_elem_t *list_elem;
   block_t *block = NULL;
   uint8_t index = deduce_list_index(asize);
-  for (int i = index; i < LIST_TABLE_SIZE; i++) {
+  size_t ssize = asize + min_block_size;
+  // 保存满足条件( >= ssize )的Block
+  block_t *sblock = NULL;
+
+  if (list_no_empty[index] == false) {
+    goto section2;
+  }
+
+  list_elem = get_next(get_list_by_index(index));
+  if (list_elem == END_OF_LIST) {
+    list_no_empty[index] = true;
+    goto section2;
+  }
+
+  do {
+    block = payload_to_header(list_elem);
+    if (asize == get_size(block)) {
+      return block;
+    } else if (sblock == NULL && ssize <= get_size(block)) {
+      sblock = block;
+    }
+    list_elem = get_next(list_elem);
+  } while (list_elem != END_OF_LIST);
+
+  if (sblock != NULL) {
+    return sblock;
+  }
+section2:
+  index = deduce_list_index(ssize);
+  for (int i = index; i != LIST_TABLE_SIZE; i++) {
     // 如果链表是空的直接跳过
     if (list_no_empty[i] == false) {
       continue;
@@ -1942,13 +2121,34 @@ static block_t *find_first_fit(size_t asize) {
 
     do {
       block = payload_to_header(list_elem);
-      if (!(get_alloc(block)) && (asize <= get_size(block))) {
+      // 优化掉了 get_alloc(block) 先比较是不是小于 get_size(block) + block size
+      if (ssize <= get_size(block)) {
         return block;
       }
       list_elem = get_next(list_elem);
     } while (list_elem != END_OF_LIST);
   }
   return NULL; // no fit found
+}
+
+/**
+ * @brief 获取一个Cluster，如果没有则返回NULL
+ *
+ * @return block_t*
+ */
+static block_t *find_cluster_fit() {
+  list_elem_t *list_elem;
+  if (list_no_empty[G_16] == false) {
+    return NULL;
+  }
+
+  list_elem = get_next(get_list_by_index(G_16));
+  if (list_elem == END_OF_LIST) {
+    list_no_empty[G_16] = true;
+    return NULL;
+  }
+  // 非空的话返回第一个就好了
+  return payload_to_header(list_elem);
 }
 
 /**
@@ -2053,6 +2253,22 @@ bool mm_checkheap(int line) {
   if (!valid) {
     dbg_printf("\n=============\n%d: index_to_push_func size no equals to "
                "LIST_TABLE_SIZE",
+               __LINE__);
+    goto done;
+  }
+  valid = (sizeof(cluster_alloc_to_num) / sizeof(cluster_alloc_to_num[0])) ==
+          CLUSTER_ALLOC_STATUS;
+  if (!valid) {
+    dbg_printf("\n=============\n%d: cluster_alloc_to_num size no equals to "
+               "CLUSTER_ALLOC_STATUS",
+               __LINE__);
+    goto done;
+  }
+  valid = (sizeof(cluster_alloc_to_num) / sizeof(cluster_alloc_to_num[0])) ==
+          CLUSTER_ALLOC_STATUS;
+  if (!valid) {
+    dbg_printf("\n=============\n%d: cluster_alloc_to_num size no equals to "
+               "CLUSTER_ALLOC_STATUS",
                __LINE__);
     goto done;
   }
@@ -2184,14 +2400,23 @@ void *malloc(size_t size) {
     return bp;
   }
 
-  // Adjust block size to include overhead and to meet alignment requirements
-  asize = round_up(size + overhead_size, dsize);
-
-  // 至少为min_block_size
-  asize = max(min_block_size, asize);
-
-  // TODO segregate list 可能有其他实现 Search the free list for a fit
-  block = find_first_fit(asize);
+  // Cluster Block & Regular Block
+  if (size <= cluster_block_payload_size) {
+    // 查看系统中有没有现成的Cluster
+    block = find_cluster_fit();
+    if (block != NULL) {
+      goto alloc_cluster;
+    }
+    // 否则，需要构造一个新的Cluster
+    asize = cluster_size;
+  } else {
+    // Adjust block size to include overhead and to meet alignment requirements
+    asize = round_up(size + overhead_size, dsize);
+    // 至少为min_block_size
+    asize = max(min_block_size, asize);
+    // Search the free list for a fit
+    block = find_fit(asize);
+  }
 
   // If no fit is found, request more memory, and then and place the block
   if (block == NULL) {
@@ -2203,21 +2428,27 @@ void *malloc(size_t size) {
       return bp;
     }
   }
-
   // The block should be marked as free
   dbg_assert(!get_alloc(block));
-
   // Mark block as allocated
-
   remove_list_elem(get_body(block));
   size_t block_size = get_size(block);
   write_block(block, block_size, true, get_front_alloc(block));
-
   // Try to split the block if too large
   split_block(block, asize);
 
-  bp = header_to_payload(block);
-
+  if (size <= cluster_block_payload_size) {
+    // 如果是通过判断语句到达这里的，代表需要在128Byte Block上创建Cluster
+    create_cluster(block);
+  alloc_cluster:
+    // 如果是通过goto到达这里的，代表找到了一个已有的Cluster
+    dbg_assert(!deduce_cluster_full(block));
+    bp = allocate_cluster_block(block);
+    dbg_assert(!deduce_cluster_empty(block));
+    dbg_ensures(valid_block_format(block));
+  } else {
+    bp = header_to_payload(block);
+  }
   dbg_ensures(mm_checkheap(__LINE__));
   return bp;
 }
@@ -2243,22 +2474,26 @@ void free(void *bp) {
   if (bp == NULL) {
     return;
   }
-
   block_t *block = payload_to_header(bp);
-  size_t size = get_size(block);
+  if (get_cluster(block)) {
+    free_cluster_block((void *)block);
+  } else {
+    size_t size = get_size(block);
 
-  // The block should be marked as allocated
-  dbg_assert(get_alloc(block));
+    // The block should be marked as allocated
+    dbg_assert(get_alloc(block));
 
-  // Mark the block as free
-  write_block(block, size, false, get_front_alloc(block));
-  set_front_alloc_of_back_block(block, false);
+    // Mark the block as free
+    write_block(block, size, false, get_front_alloc(block));
+    set_front_alloc_of_back_block(block, false);
 
-  // Try to coalesce the block with its neighbors
-  block = coalesce_block(block);
+    // Try to coalesce the block with its neighbors
+    block = coalesce_block(block);
 
-  // 将新Free block插入到合适的链表中
-  push_list(deduce_list_index(get_size(block)), (list_elem_t *)get_body(block));
+    // 将新Free block插入到合适的链表中
+    push_list(deduce_list_index(get_size(block)),
+              (list_elem_t *)get_body(block));
+  }
 
   dbg_ensures(mm_checkheap(__LINE__));
 }
