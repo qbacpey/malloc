@@ -134,12 +134,6 @@ static const size_t cluster_block_size = dsize;
 static const size_t cluster_block_payload_size = wsize;
 
 /**
- * @brief get_body(block) + sizeof(list_elem_t)
- *
- */
-static const size_t cluster_header_size = 24;
-
-/**
  * @brief Header以及Footer的低位（0），用于计算当前Block是否被分配
  */
 static const word_t alloc_mask = 0x1;
@@ -155,12 +149,6 @@ static const word_t front_alloc_mask = 0x2;
  *
  */
 static const word_t cluster_mask = 0x4;
-
-/**
- * @brief 低四位中第四位的掩码
- *
- */
-static const word_t cluster_block_mask = 0x8;
 
 /**
  * @brief Cluster中六个Cluster Block的分配情况Bit
@@ -195,13 +183,30 @@ static const uint8_t group_mask = 0xFF;
 static const word_t cluster_block_alloc_mask_table[CLUSTER_BLOCK_COUNT] = {
     CLUSTER_B1, CLUSTER_B2, CLUSTER_B3, CLUSTER_B4, CLUSTER_B5, CLUSTER_B6};
 
-/** @brief cluster共有多少种不同的分配状态  */
+/**
+ * @brief cluster共有多少种不同的分配状态
+ *
+ */
 #define CLUSTER_ALLOC_STATUS 64
-/** @brief lookup table，用于快速找到一个6 Bit数中的第一个0的Index  */
+
+/**
+ * @brief lookup table，用于快速找到一个6 Bit数中的第一个0的Index
+ *
+ */
 static const uint8_t cluster_alloc_to_num[] = {
     0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, 4, 0, 1, 0, 2,           0, 1,
     0, 3, 0, 1, 0, 2, 0, 1, 0, 5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1,           0, 2,
     0, 1, 0, 4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0, CLUSTER_FULL};
+
+/**
+ * @brief 根据Cluster的Alloc field，确定其中有几个Cluster
+ * Block已分配（计算其中1的数目）
+ *
+ */
+static const uint8_t cluster_alloc_to_bit_count[] = {
+    0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3,
+    3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4,
+    3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6};
 
 #define G_EMPTY 255
 #define G_16 0
@@ -273,7 +278,7 @@ static const uint8_t asize_to_index[] = {
     G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
     G_4096, G_4096, G_4096, G_4096};
 
-static const uint16_t index_to_asize[] = {128,  32,  48,   64,   128,
+static const uint16_t index_to_asize[] = {128, 32,  48,   64,   128,
                                           256, 512, 1024, 2048, 4096};
 
 typedef struct list_elem {
@@ -421,9 +426,11 @@ static bool list_no_empty[LIST_TABLE_SIZE];
 static bool check_free_block_aux(block_t *);
 static bool valid_block_format(block_t *);
 static bool check_word_align_dword(word_t);
+static bool check_word_align_word(word_t);
 static bool check_address_in_heap(word_t);
 static bool check_addr_is_root(list_elem_t *);
 static bool check_size_list(uint8_t, list_elem_t *);
+static bool check_is_node(block_t *);
 
 static inline list_elem_t *get_prev(list_elem_t *);
 static inline void set_prev(list_elem_t *, list_elem_t *);
@@ -432,6 +439,7 @@ static inline void set_next(list_elem_t *, list_elem_t *);
 
 static void push_front(list_elem_t *root, list_elem_t *new_head);
 static void push_order(list_elem_t *root, list_elem_t *block);
+static void push_list(uint8_t table_index, list_elem_t *list_elem);
 static void remove_list_elem(list_elem_t *);
 static list_elem_t *get_list_by_index(uint8_t);
 
@@ -487,6 +495,8 @@ static size_t round_up(size_t size, size_t n) {
  *
  * Packed values are used for both headers and footers.
  *
+ * TODO 查表优化
+ *
  * The allocation status is packed into the lowest bit of the word.
  *
  * @param[in] size The size of the block being represented
@@ -513,7 +523,7 @@ static inline word_t pack_regular(size_t size, bool alloc, bool front_alloc) {
  * @return word_t
  */
 static inline word_t pack_cluster(bool alloc, bool front_alloc) {
-  word_t word = cluster_block_size;
+  word_t word = cluster_size;
   word |= cluster_mask;
   return pack_regular((size_t)word, alloc, front_alloc);
 }
@@ -675,11 +685,11 @@ static bool get_cluster(block_t *block) {
 
 /**
  * @brief 获取BLOCK的alloc字段（即Cluster的第四个word）
- * 
- * @param block 
- * @return word_t 
+ *
+ * @param block
+ * @return word_t
  */
-static word_t* get_cluster_alloc_field(block_t *block){
+static word_t *get_cluster_alloc_field(block_t *block) {
   return (word_t *)block + 3;
 }
 
@@ -707,8 +717,8 @@ static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
   dbg_assert(get_cluster(block) == true);
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
 
-  return ((*get_cluster_alloc_field(block)) & (cluster_block_alloc_mask_table[num])) !=
-                 0
+  return ((*get_cluster_alloc_field(block)) &
+          (cluster_block_alloc_mask_table[num])) != 0
              ? true
              : false;
 }
@@ -723,7 +733,8 @@ static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
 static bool deduce_cluster_empty(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) == 0 ? true : false;
+  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) == 0 ? true
+                                                                     : false;
 }
 
 /**
@@ -736,7 +747,8 @@ static bool deduce_cluster_empty(block_t *block) {
 static bool deduce_cluster_full(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) == cluster_alloc_mask
+  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) ==
+                 cluster_alloc_mask
              ? true
              : false;
 }
@@ -861,7 +873,32 @@ static void write_block(block_t *block, size_t size, bool alloc,
 }
 
 /**
- * @brief 在BLOCK上创建一个Cluster
+ * @brief 获取BLOCK的第NUM个Cluster Block
+ *
+ * @param block
+ * @param num
+ * @return void*
+ */
+static inline void *get_cluster_block(block_t *block, uint8_t num) {
+  dbg_requires(block != NULL);
+  dbg_assert(get_cluster(block) == true);
+  dbg_assert(num < CLUSTER_BLOCK_COUNT);
+  // TODO 优化
+  return (void *)block + min_block_size + num * dsize;
+}
+
+/**
+ * @brief 利用Cluster Block的地址计算其Payload的地址
+ *
+ * @param cluster_block
+ * @return void*
+ */
+static inline void *cluster_block_to_payload(void *cluster_block) {
+  return cluster_block + wsize;
+}
+
+/**
+ * @brief 在BLOCK上创建一个Cluster，将其压入G_16链表中
  *
  * @note BLOCK的大小必须是128 Byte且已分配并不位于任何表中
  *
@@ -874,36 +911,23 @@ static void create_cluster(block_t *block) {
   dbg_assert(get_size(block) == cluster_size);
   dbg_assert(get_alloc(block));
   dbg_ensures(valid_block_format(block));
+
+  // 需要在这个位置就压入链表
   // 设置Cluster Bit
   set_cluster((word_t *)block);
   set_cluster((word_t *)block + 4);
 
   uint8_t num = 0;
   // 设置每一个cluster block的第2个半字为对应编号
-  for (uint8_t *p = get_cluster_block(block, 0);
-       num != CLUSTER_BLOCK_COUNT; p += cluster_block_size) {
+  for (uint8_t *p = get_cluster_block(block, 0); num != CLUSTER_BLOCK_COUNT;
+       p += cluster_block_size) {
     p[4] = num;
-    *p |= (uint8_t)cluster_block_mask;
+    *p |= (uint8_t)cluster_mask;
     num++;
   }
-}
 
-/**
- * @brief 获取BLOCK的第NUM个Cluster Block
- *
- * @param block
- * @param num
- * @return void*
- */
-static inline void *get_cluster_block(block_t *block, uint8_t num) {
-  dbg_requires(block != NULL);
-  dbg_assert(get_cluster(block) == true);
-  dbg_assert(num < CLUSTER_BLOCK_COUNT);
-  // 注意，每一个Cluster Block都有自己的Header
-  return (uint16_t *)((void *)block + min_block_size + overhead_size) +
-         num;
+  push_list(G_16, (list_elem_t *)get_body(block));
 }
-
 /**
  * @brief 利用CLUSTER_BLOCK的地址以及它的编号（NUM）推断出其所在Cluster的位置
  *
@@ -913,9 +937,9 @@ static inline void *get_cluster_block(block_t *block, uint8_t num) {
  */
 static inline block_t *get_cluster_by_cluster_block(void *cluster_block,
                                                     uint8_t num) {
-  dbg_assert(check_word_align_dword((word_t)cluster_block));
+  dbg_assert(check_word_align_word((word_t)cluster_block));
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
-  return (block_t *)(cluster_block - overhead_size - num * cluster_block_size - min_block_size);
+  return (block_t *)(cluster_block - num * cluster_block_size - min_block_size);
 }
 
 /**
@@ -960,19 +984,23 @@ static void *allocate_cluster_block(block_t *block) {
   uint8_t num = get_free_cluster_block(block);
   dbg_ensures(num != CLUSTER_FULL);
 
-  set_cluster_block_alloc(block, num, true);
-  if (deduce_cluster_full(block)) {
-    // 将Block中链表中移除
+  // 由于是第五个Byte，需要作移位处理
+  word_t cluster_alloc_field = *get_cluster_alloc_field(block) >> 32;
+  if (cluster_alloc_to_bit_count[cluster_alloc_field] ==
+      CLUSTER_BLOCK_COUNT - 1) {
+    // 分配此Block之后Cluster即满，需先将Block中链表中移除
     remove_list_elem(get_body(block));
-  } else if (!get_alloc(block)) {
+  } else if (cluster_alloc_to_bit_count[cluster_alloc_field] == 0) {
     // 如果没有设置alloc bit，那么需要设置alloc bit
     block->header = pack_cluster(true, get_front_alloc(block));
     set_front_alloc_of_back_block(block, true);
   }
-  void *result = get_cluster_block(block, num);
+  set_cluster_block_alloc(block, num, true);
+  void *cluster_block = get_cluster_block(block, num);
+  void *payload = cluster_block_to_payload(cluster_block);
   dbg_ensures(num != CLUSTER_FULL);
-  dbg_ensures(get_cluster_block_number(result) == num);
-  return result;
+  dbg_ensures(get_cluster_block_number(cluster_block) == num);
+  return payload;
 }
 
 /**
@@ -991,14 +1019,15 @@ static void free_cluster_block(void *cluster_block) {
   if (deduce_cluster_full(cluster)) {
     // 链表由满变非空，需要将其加入链表中
     set_cluster_block_alloc(cluster, num, false);
-    push_front(list_table[0], get_body(cluster));
+    push_list(G_16, (list_elem_t *)get_body(cluster));
   } else {
     set_cluster_block_alloc(cluster, num, false);
     // 链表变为空，需要设置alloc bit
     if (deduce_cluster_empty(cluster)) {
       cluster->header = pack_cluster(false, get_front_alloc(cluster));
-      *header_to_footer(cluster) |= (alloc_mask | cluster_mask);
-      set_front_alloc_of_back_block(cluster, true);
+      *header_to_footer(cluster) =
+          pack_cluster(false, get_front_alloc(cluster));
+      set_front_alloc_of_back_block(cluster, false);
     }
   }
 }
@@ -1101,7 +1130,7 @@ static list_elem_t *find_list_by_cmp(list_elem_t *root, list_elem_t *list_elem,
  */
 static inline list_elem_t *get_prev(list_elem_t *this) {
   dbg_assert(this != NULL);
-  dbg_assert(check_addr_is_root(this) || !get_alloc(payload_to_header(this)));
+  dbg_assert(check_is_node(payload_to_header(this)));
   return this->prev;
 }
 
@@ -1115,7 +1144,7 @@ static inline list_elem_t *get_prev(list_elem_t *this) {
  */
 static inline void set_prev(list_elem_t *this, list_elem_t *block) {
   dbg_assert(this != NULL);
-  dbg_assert(check_addr_is_root(this) || !get_alloc(payload_to_header(this)));
+  dbg_assert(check_is_node(payload_to_header(this)));
   this->prev = block;
 }
 
@@ -1126,7 +1155,7 @@ static inline void set_prev(list_elem_t *this, list_elem_t *block) {
  * @return list_elem_t*
  */
 static inline list_elem_t *get_next(list_elem_t *this) {
-  dbg_assert(check_addr_is_root(this) || !get_alloc(payload_to_header(this)));
+  dbg_assert(check_is_node(payload_to_header(this)));
   return this->next;
 }
 
@@ -1137,7 +1166,7 @@ static inline list_elem_t *get_next(list_elem_t *this) {
  * @param block
  */
 static inline void set_next(list_elem_t *this, list_elem_t *block) {
-  dbg_assert(check_addr_is_root(this) || !get_alloc(payload_to_header(this)));
+  dbg_assert(check_is_node(payload_to_header(this)));
   this->next = block;
 }
 
@@ -1256,6 +1285,29 @@ static list_elem_t *pop_front(list_elem_t *root) {
 }
 
 /**
+ * @brief 检查可否将LIST_ELEM从对应链表中移出
+ *
+ * @param list_elem
+ * @return true
+ * @return false
+ */
+static bool check_remove(list_elem_t *list_elem) {
+  dbg_assert(list_elem != NULL);
+  block_t *block = payload_to_header(list_elem);
+  dbg_assert(get_size(block) != 0);
+  // 由于是第五个Byte，需要作移位处理
+  word_t cluster_alloc_field = *get_cluster_alloc_field(block) >> 32;
+  if (get_cluster(block)) {
+    // 如果是Cluster，只只剩一个空位或全空的时候才可将其移除
+    dbg_ensures(cluster_alloc_to_bit_count[cluster_alloc_field] ==
+                    CLUSTER_BLOCK_COUNT - 1 ||
+                deduce_cluster_empty(block));
+  }
+  dbg_ensures(check_free_block_aux(block));
+  return true;
+}
+
+/**
  * @brief 将LIST_ELEM从链表中移出链表
  *
  * @note LIST_ELEM必须位于某个链表中，可以是头节点
@@ -1265,10 +1317,7 @@ static list_elem_t *pop_front(list_elem_t *root) {
  * @pre LIST_ELEM不能为prologue list_elem或者epilogue list_elem
  */
 static void remove_list_elem(list_elem_t *list_elem) {
-  dbg_assert(list_elem != NULL);
-  dbg_assert(get_size(payload_to_header(list_elem)) != 0);
-  dbg_assert(get_alloc(payload_to_header(list_elem)) == false);
-  dbg_assert(check_free_block_aux(payload_to_header(list_elem)) == true);
+  dbg_assert(check_remove(list_elem));
 
   if (get_next(list_elem) != END_OF_LIST) {
     set_prev(get_next(list_elem), get_prev(list_elem));
@@ -1289,52 +1338,6 @@ static void push_list(uint8_t table_index, list_elem_t *list_elem) {
   push_func_t push_func = index_to_push_func[table_index];
   push_func(root, list_elem);
   list_no_empty[table_index] = true;
-}
-
-/**
- * @brief 将LIST_ELEM之前的元素移出链表
- *
- * @deprecated 实现未修改为虚拟头节点
- *
- * @note LIST_ELEM不可以是链表第一个元素
- *
- * @param list_elem
- * @return list_elem_t*
- */
-static list_elem_t *remove_before(list_elem_t *list_elem) {
-  dbg_assert(list_elem != NULL);
-  dbg_assert(get_size(payload_to_header(list_elem)) != 0);
-  dbg_assert(get_alloc(payload_to_header(list_elem)) == false);
-  dbg_assert(check_free_block_aux(payload_to_header(list_elem)) == true);
-
-  list_elem_t *removed = get_prev(list_elem);
-  if (get_prev(removed) != NULL)
-    set_next(get_prev(removed), list_elem);
-  set_prev(list_elem, get_prev(removed));
-  return removed;
-}
-
-/**
- * @brief 将LIST_ELEM之后的元素移出链表
- *
- * @deprecated 实现未修改为虚拟头节点
- *
- * @note LIST_ELEM不可以是链表最后一个元素
- *
- * @param block
- * @return block_t*
- */
-static list_elem_t *remove_after(list_elem_t *block) {
-  dbg_assert(block != NULL);
-  dbg_assert(get_size(payload_to_header(block)) != 0);
-  dbg_assert(get_alloc(payload_to_header(block)) == false);
-  dbg_assert(check_free_block_aux(payload_to_header(block)) == true);
-
-  list_elem_t *removed = get_next(block);
-  if (get_next(removed) != NULL)
-    set_prev(get_next(removed), block);
-  set_next(block, get_next(removed));
-  return removed;
 }
 
 /**
@@ -1478,6 +1481,17 @@ static bool check_word_align_dword(word_t word) {
 }
 
 /**
+ * @brief 检查WORD是否对齐单字，即低四位是否有东西
+ *
+ * @param word
+ * @return true
+ * @return false
+ */
+static bool check_word_align_word(word_t word) {
+  return (word & low_order_mask) == (word_t)8;
+}
+
+/**
  * @brief 检查BLOCK是否对齐：payload起点对齐16Byte、BLOCK底部对齐16Byte
  *
  * @param block
@@ -1564,8 +1578,8 @@ static bool check_cluster_tag(block_t *block) {
  */
 static bool check_cluster_block_num(block_t *block) {
   uint8_t i = 0;
-  for (uint8_t *p = (void *)block + cluster_header_size;
-       i != CLUSTER_BLOCK_COUNT; p += cluster_block_size) {
+  for (uint8_t *p = get_cluster_block(block, 0); i != CLUSTER_BLOCK_COUNT;
+       p += cluster_block_size) {
     if (i != p[4]) {
       dbg_printf("i: %d, p[4]: %d\n", i, p[4]);
       return false;
@@ -1578,13 +1592,16 @@ static bool check_cluster_block_num(block_t *block) {
 /**
  * @brief 检查Cluster中分配情况是否和alloc bit情况匹配
  *
+ * @par 如果alloc为0，那么不该有任何Cluster Block已分配；
+ *      如果alloc不为0
+ *
  * @param block
  * @return true
  * @return false
  */
 static bool check_cluster_alloc_bit(block_t *block) {
-  if (get_alloc(block)) {
-    return !deduce_cluster_empty(block);
+  if (!get_alloc(block)) {
+    return deduce_cluster_empty(block);
   }
   return true;
 }
@@ -1801,6 +1818,17 @@ static bool check_size_list(uint8_t index, list_elem_t *list_elem) {
 }
 
 /**
+ * @brief 检查指定BLOCK的格式是否与链表结点的语法对应
+ *
+ * @return true
+ * @return false
+ */
+static bool check_is_node(block_t *block) {
+  return check_addr_is_root(get_body(block)) || !get_alloc(block) ||
+         (get_cluster(block) && !deduce_cluster_full(block));
+}
+
+/**
  * @brief 检查BLOCK是否是一个合法的链表节点
  *
  * @param block
@@ -1810,7 +1838,8 @@ static bool check_size_list(uint8_t index, list_elem_t *list_elem) {
 static bool valid_node(block_t *block) {
   bool validation = false;
   list_elem_t *list_elem = (list_elem_t *)get_body(block);
-  dbg_assert(!get_alloc(block));
+  dbg_assert(!get_alloc(block) ||
+             (get_cluster(block) && !deduce_cluster_full(block)));
 
   // 检查next以及prev指针
   validation = check_node_next(list_elem);
@@ -2299,7 +2328,7 @@ bool mm_checkheap(int line) {
       goto done;
     }
 
-    if (!get_alloc(curr)) {
+    if (!get_alloc(curr) || (get_cluster(curr) && !deduce_cluster_full(curr))) {
       count++;
     }
   }
@@ -2400,8 +2429,10 @@ void *malloc(size_t size) {
     return bp;
   }
 
+  // 用于表示要不要执行和Cluster Block分配相关的逻辑
+  bool alloc_cluster = size <= cluster_block_payload_size;
   // Cluster Block & Regular Block
-  if (size <= cluster_block_payload_size) {
+  if (alloc_cluster) {
     // 查看系统中有没有现成的Cluster
     block = find_cluster_fit();
     if (block != NULL) {
@@ -2437,7 +2468,7 @@ void *malloc(size_t size) {
   // Try to split the block if too large
   split_block(block, asize);
 
-  if (size <= cluster_block_payload_size) {
+  if (alloc_cluster) {
     // 如果是通过判断语句到达这里的，代表需要在128Byte Block上创建Cluster
     create_cluster(block);
   alloc_cluster:
