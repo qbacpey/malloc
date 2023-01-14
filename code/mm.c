@@ -154,7 +154,7 @@ static const word_t cluster_mask = 0x4;
  * @brief Cluster中六个Cluster Block的分配情况Bit
  *
  */
-static const word_t cluster_alloc_mask = 0x0000003F00000000;
+static const word_t cluster_alloc_field_mask = 0x0000003F00000000;
 
 /**
  * @brief 由于地址是双字对齐的，因此低4位不会被用到
@@ -702,7 +702,7 @@ static word_t *get_cluster_alloc_field(block_t *block) {
  */
 static uint8_t get_cluster_alloc(block_t *block) {
   dbg_assert(get_cluster(block) == true);
-  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) >> 32;
+  return (*get_cluster_alloc_field(block) & cluster_alloc_field_mask) >> 32;
 }
 
 /**
@@ -733,8 +733,9 @@ static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
 static bool deduce_cluster_empty(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) == 0 ? true
-                                                                     : false;
+  return (*get_cluster_alloc_field(block) & cluster_alloc_field_mask) == 0
+             ? true
+             : false;
 }
 
 /**
@@ -747,8 +748,8 @@ static bool deduce_cluster_empty(block_t *block) {
 static bool deduce_cluster_full(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return (*get_cluster_alloc_field(block) & cluster_alloc_mask) ==
-                 cluster_alloc_mask
+  return (*get_cluster_alloc_field(block) & cluster_alloc_field_mask) ==
+                 cluster_alloc_field_mask
              ? true
              : false;
 }
@@ -799,11 +800,11 @@ static void set_front_alloc_of_back_block(block_t *block, bool front_alloc) {
  *
  * @param block
  */
-static void dbg_print_block(block_t *block) {
-  dbg_printf("\nBlock address:\t\t\t %p\n", block);
-  dbg_printf("Block header:\t\t\t 0x%09lx\n", block->header);
-  dbg_printf("Block footer:\t\t\t 0x%09lx\n", *header_to_footer(block));
-  dbg_printf("Block Size:\t\t\t %ld\n", get_size(block));
+static void print_block(block_t *block) {
+  printf("\nBlock address:\t\t\t %p\n", block);
+  printf("Block header:\t\t\t 0x%09lx\n", block->header);
+  printf("Block footer:\t\t\t 0x%09lx\n", *header_to_footer(block));
+  printf("Block Size:\t\t\t %ld\n", get_size(block));
   printf("Block alloc:\t\t\t %s\n",
          get_alloc(block) == true ? "true" : "false");
   printf("Block front alloc:\t\t %s\n",
@@ -915,7 +916,9 @@ static void create_cluster(block_t *block) {
   // 需要在这个位置就压入链表
   // 设置Cluster Bit
   set_cluster((word_t *)block);
-  set_cluster((word_t *)block + 4);
+
+  // 清空Allocated field
+  *((word_t *)block + 3) = 0;
 
   uint8_t num = 0;
   // 设置每一个cluster block的第2个半字为对应编号
@@ -1517,7 +1520,7 @@ static bool valid_block_align(block_t *block) {
   }
 done:
   if (!validation) {
-    dbg_print_block(block);
+    print_block(block);
     dbg_printf("=============\n");
   }
   return validation;
@@ -1674,7 +1677,7 @@ static bool valid_block_format(block_t *block) {
   }
 done:
   if (!validation) {
-    dbg_print_block(block);
+    print_block(block);
     dbg_printf("=============\n");
   }
   return validation;
@@ -1872,7 +1875,7 @@ static bool valid_node(block_t *block) {
     goto done;
   }
 
-  if (get_size(block) > MAX_SINGLE_BLOCK_GROUP) {
+  if (get_size(block) > MAX_SINGLE_BLOCK_GROUP && !get_cluster(block)) {
     validation = check_node_ordered_with_next(list_elem);
     if (!validation) {
       dbg_printf("\n=============\n%d: Address of next pointer(%p) higher than "
@@ -1886,7 +1889,7 @@ static bool valid_node(block_t *block) {
 
 done:
   if (!validation) {
-    dbg_print_block(block);
+    print_block(block);
     dbg_printf("=============\n");
   }
 
@@ -2445,9 +2448,9 @@ void *malloc(size_t size) {
     asize = round_up(size + overhead_size, dsize);
     // 至少为min_block_size
     asize = max(min_block_size, asize);
-    // Search the free list for a fit
-    block = find_fit(asize);
   }
+  // 需要放外边 Search the free list for a fit
+  block = find_fit(asize);
 
   // If no fit is found, request more memory, and then and place the block
   if (block == NULL) {
