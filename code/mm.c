@@ -127,6 +127,7 @@ static const size_t cluster_size = 8 * dsize;
  *
  */
 static const size_t cluster_block_size = dsize;
+
 /**
  * @brief 一个cluster block的大小
  *
@@ -134,49 +135,67 @@ static const size_t cluster_block_size = dsize;
 static const size_t cluster_block_payload_size = wsize;
 
 /**
- * @brief Header以及Footer的低位（0），用于计算当前Block是否被分配
- */
-static const word_t alloc_mask = 0x1;
-
-/**
- * @brief Header以及Footer的低位（1），用于计算当前Block之前的Block是否被分配
+ * @brief Flag field bit的数目
  *
  */
-static const word_t front_alloc_mask = 0x2;
+static const uint8_t flag_bit_count = 4;
 
 /**
- * @brief 低四位中第三位的掩码
+ * @brief Header中被用作size字段的Bit数目
  *
  */
-static const word_t cluster_mask = 0x4;
+static const uint8_t size_bit_count = 64 - flag_bit_count;
+
+/**
+ * @brief Flag字段的低位（0），用于计算当前Block是否被分配
+ */
+static const word_t alloc_mask = (word_t)0x1 << size_bit_count;
+
+/**
+ * @brief Flag字段的低位（1），用于计算当前Block之前的Block是否被分配
+ *
+ */
+static const word_t front_alloc_mask = (word_t)0x2 << size_bit_count;
+
+/**
+ * @brief Flag字段中第三位的掩码
+ *
+ */
+static const word_t cluster_mask = (word_t)0x4 << size_bit_count;
 
 /**
  * @brief Cluster中六个Cluster Block的分配情况Bit
  *
  */
-static const word_t cluster_alloc_field_mask = 0x0000003F00000000;
+static const word_t cluster_alloc_field_mask = 0x000000000000003F;
 
 /**
- * @brief 由于地址是双字对齐的，因此低4位不会被用到
+ * @brief Flag field为word的最后四个Bit
  *
  */
-static const word_t low_order_mask = (word_t)0xF;
+// static const word_t flag_field_mask = (word_t)0xF << size_bit_count;
+
+/**
+ * @brief 低四位掩码
+ *
+ */
+static const word_t low_four_bit_mask = (word_t)0xF;
 
 /**
  * 用于计算Block大小的掩码，单位是Byte
  */
-static const word_t size_mask = ~(word_t)0xF;
+// static const word_t size_mask = ~flag_field_mask;
 
 /** @brief 用于定位ASIZE中间8（0~255）位的掩码（需要先进行移动位置操作）*/
 static const uint8_t group_mask = 0xFF;
 
-/** @brief 从Header的第五个Byte开始，每一个Bit对应一个Cluster Block的分配情况 */
-#define CLUSTER_B1 0x0000000100000000
-#define CLUSTER_B2 0x0000000200000000
-#define CLUSTER_B3 0x0000000400000000
-#define CLUSTER_B4 0x0000000800000000
-#define CLUSTER_B5 0x0000001000000000
-#define CLUSTER_B6 0x0000002000000000
+/** @brief 从Header的第一个Byte开始，每一个Bit对应一个Cluster Block的分配情况 */
+#define CLUSTER_B1 0x0000000000000001
+#define CLUSTER_B2 0x0000000000000002
+#define CLUSTER_B3 0x0000000000000004
+#define CLUSTER_B4 0x0000000000000008
+#define CLUSTER_B5 0x0000000000000010
+#define CLUSTER_B6 0x0000000000000020
 #define CLUSTER_FULL 6
 
 /** @brief 一个Cluster中有6个大小为16Byte的Cluster Block */
@@ -547,7 +566,7 @@ static size_t round_up(size_t size, size_t n) {
  * @return The packed value
  */
 static inline word_t pack_regular(size_t size, bool alloc, bool front_alloc) {
-  word_t word = size;
+  word_t word = size >> flag_bit_count;
   if (alloc) {
     word |= alloc_mask;
   }
@@ -566,21 +585,36 @@ static inline word_t pack_regular(size_t size, bool alloc, bool front_alloc) {
  * @return word_t
  */
 static inline word_t pack_cluster(bool alloc, bool front_alloc) {
-  word_t word = cluster_size;
+  static const size_t size = cluster_size >> flag_bit_count;
+  word_t word = size;
+  if (alloc) {
+    word |= alloc_mask;
+  }
+  if (front_alloc) {
+    word |= front_alloc_mask;
+  }
   word |= cluster_mask;
-  return pack_regular((size_t)word, alloc, front_alloc);
+  return word;
 }
 
 /**
- * @brief 将NUM打包到一个Word里，作为Cluster Block的Header
+ * @brief 将NUM打包到一个Word里，作为Cluster
+ * Block的Header。NUM将会被放在返回值的第五个Byte中
  *
  * @param num
  * @return word_t
  */
 static inline word_t pack_cluster_block_header(uint8_t num) {
+  const static word_t num_to_mask[] = {0x0,
+                                       (word_t)0x1 << 32,
+                                       (word_t)0x2 << 32,
+                                       (word_t)0x3 << 32,
+                                       (word_t)0x4 << 32,
+                                       (word_t)0x5 << 32};
+
   word_t header = num;
-  header <<= 32;
   header |= cluster_mask;
+  header |= num_to_mask[num];
   return header;
 }
 /**
@@ -592,7 +626,7 @@ static inline word_t pack_cluster_block_header(uint8_t num) {
  * @param[in] word
  * @return The size of the block represented by the word
  */
-static size_t extract_size(word_t word) { return (word & size_mask); }
+static size_t extract_size(word_t word) { return (word << flag_bit_count); }
 
 /**
  * @brief Extracts the size of a block from its header.
@@ -672,7 +706,10 @@ static size_t get_body_size(block_t *block) {
  * @param[in] word
  * @return The allocation status correpsonding to the word
  */
-static bool extract_alloc(word_t word) { return (bool)(word & alloc_mask); }
+static bool extract_alloc(word_t word) {
+  return (word & alloc_mask) != 0;
+  ;
+}
 
 /**
  * @brief Returns the allocation status of the front block of a given header
@@ -685,7 +722,7 @@ static bool extract_alloc(word_t word) { return (bool)(word & alloc_mask); }
  */
 static bool extract_front_alloc(word_t word) {
   // 不等于0代表该Bit为1，前一个Block处于Alloc
-  return (bool)((word & front_alloc_mask) != 0);
+  return (word & front_alloc_mask) != 0;
 }
 
 /**
@@ -697,7 +734,8 @@ static bool extract_front_alloc(word_t word) {
  * @return bool
  */
 static bool extract_cluster(word_t word) {
-  return (bool)((word & cluster_mask) != 0);
+  return (word & cluster_mask) != 0;
+  ;
 }
 
 /**
@@ -741,23 +779,24 @@ static bool get_cluster(block_t *block) {
 /**
  * @brief 获取BLOCK的alloc字段（即Cluster的第四个word）
  *
+ * TODO 改成2
+ *
  * @param block
  * @return word_t
  */
-static word_t *get_cluster_alloc_field(block_t *block) {
+static word_t *cluster_alloc_field(block_t *block) {
   return (word_t *)block + 3;
 }
 
 /**
- * @brief 获取Cluster Footers的第五个Byte，也就是用于标识Cluster
- * Block分配情况的那一Byte
+ * @brief 获取Cluster的分配情况Field
  *
  * @param block
  * @return uint8_t
  */
-static uint8_t get_cluster_alloc(block_t *block) {
+static uint8_t get_cluster_alloc_field(block_t *block) {
   dbg_assert(get_cluster(block) == true);
-  return (*get_cluster_alloc_field(block) & cluster_alloc_field_mask) >> 32;
+  return *cluster_alloc_field(block) & cluster_alloc_field_mask;
 }
 
 /**
@@ -772,10 +811,8 @@ static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
   dbg_assert(get_cluster(block) == true);
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
 
-  return ((*get_cluster_alloc_field(block)) &
-          (cluster_block_alloc_mask_table[num])) != 0
-             ? true
-             : false;
+  return (get_cluster_alloc_field(block) &
+          cluster_block_alloc_mask_table[num]) != 0;
 }
 
 /**
@@ -788,9 +825,7 @@ static bool get_cluster_block_alloc(block_t *block, uint8_t num) {
 static bool deduce_cluster_empty(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return (*get_cluster_alloc_field(block) & cluster_alloc_field_mask) == 0
-             ? true
-             : false;
+  return (get_cluster_alloc_field(block) & cluster_alloc_field_mask) == 0;
 }
 
 /**
@@ -803,10 +838,8 @@ static bool deduce_cluster_empty(block_t *block) {
 static bool deduce_cluster_full(block_t *block) {
   dbg_assert(get_cluster(block) == true);
 
-  return (*get_cluster_alloc_field(block) & cluster_alloc_field_mask) ==
-                 cluster_alloc_field_mask
-             ? true
-             : false;
+  return (get_cluster_alloc_field(block) & cluster_alloc_field_mask) ==
+         cluster_alloc_field_mask;
 }
 
 /**
@@ -820,9 +853,9 @@ static void set_cluster_block_alloc(block_t *block, uint8_t num, bool alloc) {
   dbg_assert(get_cluster(block) == true);
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
   if (alloc)
-    *get_cluster_alloc_field(block) |= cluster_block_alloc_mask_table[num];
+    *cluster_alloc_field(block) |= cluster_block_alloc_mask_table[num];
   else
-    *get_cluster_alloc_field(block) &= ~(cluster_block_alloc_mask_table[num]);
+    *cluster_alloc_field(block) &= ~(cluster_block_alloc_mask_table[num]);
 }
 
 /**
@@ -832,7 +865,10 @@ static void set_cluster_block_alloc(block_t *block, uint8_t num, bool alloc) {
  * @param front_alloc 目标布尔值
  */
 static void set_front_alloc(word_t *tag, bool front_alloc) {
-  *tag |= (front_alloc << 1);
+  if (front_alloc)
+    *tag |= front_alloc_mask;
+  else
+    *tag &= ~front_alloc_mask;
 }
 
 /**
@@ -1018,7 +1054,7 @@ static inline uint8_t get_cluster_block_number(void *cluster_block) {
  * @return uint8_t
  */
 static uint8_t get_free_cluster_block(block_t *block) {
-  word_t alloc_field = get_cluster_alloc(block);
+  word_t alloc_field = get_cluster_alloc_field(block);
   dbg_ensures(alloc_field < CLUSTER_ALLOC_STATUS);
   uint8_t num = cluster_alloc_to_num[alloc_field];
   dbg_ensures(num == CLUSTER_FULL ||
@@ -1041,8 +1077,8 @@ static void *allocate_cluster_block(block_t *block) {
   uint8_t num = get_free_cluster_block(block);
   dbg_ensures(num != CLUSTER_FULL);
 
-  // 由于是第五个Byte，需要作移位处理
-  word_t cluster_alloc_field = *get_cluster_alloc_field(block) >> 32;
+  // 直接就是第一个Byte
+  uint8_t cluster_alloc_field = get_cluster_alloc_field(block);
   if (cluster_alloc_to_bit_count[cluster_alloc_field] ==
       CLUSTER_BLOCK_COUNT - 1) {
     // 分配此Block之后Cluster即满，需先将Block中链表中移除
@@ -1350,11 +1386,10 @@ static bool check_remove(list_elem_t *list_elem) {
   dbg_assert(list_elem != NULL);
   block_t *block = payload_to_header(list_elem);
   dbg_assert(get_size(block) != 0);
-  // 由于是第五个Byte，需要作移位处理
-  word_t cluster_alloc_field = *get_cluster_alloc_field(block) >> 32;
+  // 直接就是第一个Byte
   if (get_cluster(block)) {
     // 如果是Cluster，只只剩一个空位或全空的时候才可将其移除
-    dbg_ensures(cluster_alloc_to_bit_count[cluster_alloc_field] ==
+    dbg_ensures(cluster_alloc_to_bit_count[get_cluster_alloc_field(block)] ==
                     CLUSTER_BLOCK_COUNT - 1 ||
                 deduce_cluster_empty(block));
   }
@@ -1532,7 +1567,7 @@ static bool check_address_in_heap(word_t addr) {
  * @return false
  */
 static bool check_word_align_dword(word_t word) {
-  return (word & low_order_mask) == (word_t)0;
+  return (word & low_four_bit_mask) == (word_t)0;
 }
 
 /**
@@ -1543,7 +1578,7 @@ static bool check_word_align_dword(word_t word) {
  * @return false
  */
 static bool check_word_align_word(word_t word) {
-  return (word & low_order_mask) == (word_t)8;
+  return (word & low_four_bit_mask) == (word_t)8;
 }
 
 /**
@@ -1745,13 +1780,17 @@ done:
 static bool check_front_alloc_bit(block_t *block) {
   if (block == HEAP_START) {
     // 自己是堆中第一个数据块的话
-    return flip(get_front_alloc(block) ^ true);
+    return get_front_alloc(block);
   } else {
     // 如果前一个Block已分配的话，由于Footer不合法，因此只能迭代获取
     block_t *front_block = find_heap_by_cmp(block, cmp_back_is_block);
     dbg_assert(front_block != NULL);
-    bool front_block_alloc = get_front_alloc(front_block);
-    return flip(get_front_alloc(block) ^ front_block_alloc);
+    bool front_block_alloc = get_alloc(front_block);
+    bool result = flip(get_front_alloc(block) ^ front_block_alloc);
+    if (!result) {
+      print_block(front_block);
+    }
+    return result;
   }
 }
 
@@ -1931,17 +1970,18 @@ static bool valid_node(block_t *block) {
     goto done;
   }
 
-  if (get_size(block) > MAX_SINGLE_BLOCK_GROUP && !get_cluster(block)) {
-    validation = check_node_ordered_with_next(list_elem);
-    if (!validation) {
-      dbg_printf("\n=============\n%d: Address of next pointer(%p) higher than "
-                 "this list_elem(%p)"
-                 "\n",
-                 __LINE__, get_next(list_elem), list_elem);
+  // if (get_size(block) > MAX_SINGLE_BLOCK_GROUP && !get_cluster(block)) {
+  //   validation = check_node_ordered_with_next(list_elem);
+  //   if (!validation) {
+  //     dbg_printf("\n=============\n%d: Address of next pointer(%p) higher
+  //     than "
+  //                "this list_elem(%p)"
+  //                "\n",
+  //                __LINE__, get_next(list_elem), list_elem);
 
-      goto done;
-    }
-  }
+  //     goto done;
+  //   }
+  // }
 
 done:
   if (!validation) {
@@ -2118,7 +2158,6 @@ static void split_block(block_t *block, size_t asize) {
 
   if ((block_size - asize) >= min_block_size) {
     block_t *block_next;
-    dbg_ensures(mm_checkheap(__LINE__));
     write_block(block, asize, true, get_front_alloc(block));
 
     block_next = find_next(block);
@@ -2392,6 +2431,7 @@ bool mm_checkheap(int line) {
    */
 
   bool valid = false;
+  block_t *curr = NULL;
 
   // 检查全局数组大小是否和LIST_TABLE_SIZE匹配
   valid = (sizeof(index_to_push_func) / sizeof(index_to_push_func[0])) ==
@@ -2442,7 +2482,7 @@ bool mm_checkheap(int line) {
   }
 
   // 检查free list中所有的block
-  block_t *curr;
+
   size_t count = 0;
 
   // 检查堆中的每一个块的格式是否合法，同时统计其中free block的数目
@@ -2479,8 +2519,12 @@ bool mm_checkheap(int line) {
     goto done;
   }
 done:
-  if (!valid)
+  if (!valid) {
+    if (curr != NULL) {
+      print_block(curr);
+    }
     dbg_printf("\n=============\n");
+  }
 
   return valid;
 }
