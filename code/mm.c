@@ -1040,6 +1040,7 @@ static void create_cluster(block_t *block) {
   }
 
   push_list(G_16, (list_elem_t *)get_body(block));
+  set_front_alloc_of_back_block(block, true);
 }
 /**
  * @brief 利用CLUSTER_BLOCK的地址以及它的编号（NUM）推断出其所在Cluster的位置
@@ -1103,11 +1104,12 @@ static void *allocate_cluster_block(block_t *block) {
       CLUSTER_BLOCK_COUNT - 1) {
     // 分配此Block之后Cluster即满，需先将Block中链表中移除
     remove_list_elem(get_body(block));
-  } else if (cluster_alloc_to_bit_count[cluster_alloc_field] == 0) {
-    // 如果没有设置alloc bit，那么需要设置alloc bit
-    block->header = pack_cluster(true, get_front_alloc(block));
-    set_front_alloc_of_back_block(block, true);
   }
+  // else if (cluster_alloc_to_bit_count[cluster_alloc_field] == 0) {
+  //    如果没有设置alloc bit，那么需要设置alloc bit
+  //   block->header = pack_cluster(true, get_front_alloc(block));
+  //   set_front_alloc_of_back_block(block, true);
+  // }
   set_cluster_block_alloc(block, num, true);
   void *cluster_block = get_cluster_block(block, num);
   void *payload = cluster_block_to_payload(cluster_block);
@@ -1136,12 +1138,12 @@ static void free_cluster_block(void *cluster_block) {
   } else {
     set_cluster_block_alloc(cluster, num, false);
     // 链表变为空，需要设置alloc bit
-    if (deduce_cluster_empty(cluster)) {
-      cluster->header = pack_cluster(false, get_front_alloc(cluster));
-      *header_to_footer(cluster) =
-          pack_cluster(false, get_front_alloc(cluster));
-      set_front_alloc_of_back_block(cluster, false);
-    }
+    // if (deduce_cluster_empty(cluster)) {
+    //   cluster->header = pack_cluster(false, get_front_alloc(cluster));
+    //   *header_to_footer(cluster) =
+    //       pack_cluster(false, get_front_alloc(cluster));
+    //   set_front_alloc_of_back_block(cluster, false);
+    // }
   }
 }
 
