@@ -477,11 +477,13 @@ static inline void set_next(list_elem_t *, list_elem_t *);
 
 /* List operation */
 
-static void push_front(list_elem_t *root, list_elem_t *new_head);
-static void push_order(list_elem_t *root, list_elem_t *block);
+static void push_front(list_elem_t *root, list_elem_t *);
+static void push_order(list_elem_t *root, list_elem_t *);
+static void push_single(list_elem_t *root, list_elem_t *);
 static void push_list(uint8_t table_index, list_elem_t *list_elem);
 static void remove_list_elem(list_elem_t *);
 static list_elem_t *get_list_by_index(uint8_t);
+static list_elem_t *pop_single(list_elem_t *root);
 
 /* Block fit */
 
@@ -514,9 +516,9 @@ typedef void (*push_func_t)(list_elem_t *, list_elem_t *);
  *
  */
 static const push_func_t index_to_push_func[] = {
-    push_front, push_front, push_front, push_front, push_front,
-    push_front, push_front, push_front, push_front, push_front,
-    push_front, push_front, push_front, push_front};
+    push_single, push_front, push_front, push_front, push_front,
+    push_front,  push_front, push_front, push_front, push_front,
+    push_front,  push_front, push_front, push_front};
 
 /**
  * @brief 用于在链表中寻找合适Block的函数类型
@@ -1102,14 +1104,9 @@ static void *allocate_cluster_block(block_t *block) {
   uint8_t cluster_alloc_field = get_cluster_alloc_field(block);
   if (cluster_alloc_to_bit_count[cluster_alloc_field] ==
       CLUSTER_BLOCK_COUNT - 1) {
-    // 分配此Block之后Cluster即满，需先将Block中链表中移除
-    remove_list_elem(get_body(block));
+    // 分配此Block之后Cluster即满，需先将Block中G_16中移除
+    pop_single((list_elem_t *)(list_table + G_16));
   }
-  // else if (cluster_alloc_to_bit_count[cluster_alloc_field] == 0) {
-  //    如果没有设置alloc bit，那么需要设置alloc bit
-  //   block->header = pack_cluster(true, get_front_alloc(block));
-  //   set_front_alloc_of_back_block(block, true);
-  // }
   set_cluster_block_alloc(block, num, true);
   void *cluster_block = get_cluster_block(block, num);
   void *payload = cluster_block_to_payload(cluster_block);
@@ -1137,13 +1134,6 @@ static void free_cluster_block(void *cluster_block) {
     push_list(G_16, (list_elem_t *)get_body(cluster));
   } else {
     set_cluster_block_alloc(cluster, num, false);
-    // 链表变为空，需要设置alloc bit
-    // if (deduce_cluster_empty(cluster)) {
-    //   cluster->header = pack_cluster(false, get_front_alloc(cluster));
-    //   *header_to_footer(cluster) =
-    //       pack_cluster(false, get_front_alloc(cluster));
-    //   set_front_alloc_of_back_block(cluster, false);
-    // }
   }
 }
 
@@ -1377,6 +1367,37 @@ static void push_order(list_elem_t *root, list_elem_t *list_elem) {
   dbg_assert(prev != NULL);
   insert_after(prev, list_elem);
   dbg_ensures(mm_checkheap(__LINE__));
+}
+
+/**
+ * @brief 将LIST_ELEM推入**单向链表**ROOT中，因此只会修改list_elem->next字段
+ *
+ * @param root
+ * @param list_elem
+ */
+static void push_single(list_elem_t *root, list_elem_t *list_elem) {
+  dbg_assert(root != NULL);
+  dbg_assert(list_elem != NULL);
+  dbg_assert(get_size(payload_to_header(list_elem)) != 0);
+  dbg_assert(get_alloc(payload_to_header(list_elem)) == true);
+  dbg_assert(valid_block_format(payload_to_header(list_elem)) == true);
+
+  set_next(list_elem, get_next(root));
+  set_next(root, list_elem);
+}
+
+/**
+ * @brief 将单向链表ROOT的首个元素弹出
+ *
+ * @param root
+ */
+static list_elem_t *pop_single(list_elem_t *root) {
+  dbg_assert(root != NULL);
+
+  list_elem_t *old_head = get_next(root);
+  if (old_head != END_OF_LIST)
+    set_next(root, get_next(old_head));
+  return old_head;
 }
 
 /**
@@ -1977,7 +1998,7 @@ static bool valid_node(block_t *block) {
     goto done;
   }
 
-  validation = check_match_with_front(list_elem);
+  validation = get_cluster(block) || check_match_with_front(list_elem);
   if (!validation) {
     dbg_printf("\n=============\n%d: next list_elem's prev don't point to this "
                "list_elem\n",
@@ -1985,7 +2006,7 @@ static bool valid_node(block_t *block) {
     goto done;
   }
 
-  validation = check_match_with_back(list_elem);
+  validation = get_cluster(block) || check_match_with_back(list_elem);
   if (!validation) {
     dbg_printf("\n=============\n%d: prev list_elem's next don't point to this "
                "list_elem\n",
