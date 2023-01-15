@@ -141,10 +141,16 @@ static const size_t cluster_block_payload_size = wsize;
 static const uint8_t flag_bit_count = 4;
 
 /**
- * @brief Header中被用作size字段的Bit数目
+ * @brief Header中被用作size字段的Bit的开始位置n
  *
  */
 static const uint8_t size_bit_count = 64 - flag_bit_count;
+
+/**
+ * @brief Cluster Block Header中被用作num字段的Bit的开始位置
+ *
+ */
+const uint8_t num_bit_count = size_bit_count - flag_bit_count;
 
 /**
  * @brief Flag字段的低位（0），用于计算当前Block是否被分配
@@ -162,6 +168,12 @@ static const word_t front_alloc_mask = (word_t)0x2 << size_bit_count;
  *
  */
 static const word_t cluster_mask = (word_t)0x4 << size_bit_count;
+
+/**
+ * @brief word最后一个Byte的前四个Bit的mask
+ *
+ */
+static const word_t cluster_num_mask = (word_t)0xF << num_bit_count;
 
 /**
  * @brief Cluster中六个Cluster Block的分配情况Bit
@@ -599,24 +611,32 @@ static inline word_t pack_cluster(bool alloc, bool front_alloc) {
 
 /**
  * @brief 将NUM打包到一个Word里，作为Cluster
- * Block的Header。NUM将会被放在返回值的第五个Byte中
+ * Block的Header。NUM将会被放在返回值的第一个Byte的后四个Bit
  *
  * @param num
  * @return word_t
  */
 static inline word_t pack_cluster_block_header(uint8_t num) {
-  const static word_t num_to_mask[] = {0x0,
-                                       (word_t)0x1 << 32,
-                                       (word_t)0x2 << 32,
-                                       (word_t)0x3 << 32,
-                                       (word_t)0x4 << 32,
-                                       (word_t)0x5 << 32};
-
-  word_t header = num;
+  const static word_t num_to_mask[] = {
+      (word_t)0x0 << num_bit_count, (word_t)0x1 << num_bit_count,
+      (word_t)0x2 << num_bit_count, (word_t)0x3 << num_bit_count,
+      (word_t)0x4 << num_bit_count, (word_t)0x5 << num_bit_count};
+  word_t header = 0;
   header |= cluster_mask;
   header |= num_to_mask[num];
   return header;
 }
+
+/**
+ * @brief 利用指定HEADER第最后一个Byte的前四个Bit，获取该Cluster Block的标号
+ *
+ * @param header
+ * @return uint8_t
+ */
+static inline uint8_t extract_cluster_block_num(word_t header) {
+  return (header & cluster_num_mask) >> num_bit_count;
+}
+
 /**
  * @brief Extracts the size represented in a packed word.
  *
@@ -1008,8 +1028,8 @@ static void create_cluster(block_t *block) {
   // 设置Cluster Bit
   set_cluster((word_t *)block);
 
-  // 清空Allocated field
-  *((word_t *)block + 3) = 0;
+  // TODO 更改 Allocated field位置 清空Allocated field
+  *cluster_alloc_field(block) = 0;
 
   uint8_t num = 0;
   // 设置每一个cluster block的第2个半字为对应编号
@@ -1042,7 +1062,7 @@ static inline block_t *get_cluster_by_cluster_block(void *cluster_block,
  * @return uint8_t
  */
 static inline uint8_t get_cluster_block_number(void *cluster_block) {
-  uint8_t result = ((uint8_t *)cluster_block)[4];
+  uint8_t result = extract_cluster_block_num(*(word_t *)cluster_block);
   dbg_ensures(result < CLUSTER_BLOCK_COUNT);
   return result;
 }
@@ -1668,10 +1688,11 @@ static bool check_cluster_tag(block_t *block) {
  */
 static bool check_cluster_block_num(block_t *block) {
   uint8_t i = 0;
-  for (uint8_t *p = get_cluster_block(block, 0); i != CLUSTER_BLOCK_COUNT;
+  for (void *p = get_cluster_block(block, 0); i != CLUSTER_BLOCK_COUNT;
        p += cluster_block_size) {
-    if (i != p[4]) {
-      dbg_printf("i: %d, p[4]: %d\n", i, p[4]);
+    if (i != get_cluster_block_number(p)) {
+      dbg_printf("i: %d, get_cluster_block_number(p): %d\n", i,
+                 get_cluster_block_number(p));
       return false;
     }
     i++;
