@@ -214,12 +214,15 @@ static const uint8_t cluster_alloc_to_bit_count[] = {
 #define G_48 2
 #define G_64 3
 #define G_128 4
-#define G_256 5
-#define G_512 6
-#define G_1024 7
-#define G_2048 8
-#define G_4096 9
-#define G_INF 10
+#define G_192 5
+#define G_256 6
+#define G_384 7
+#define G_512 8
+#define G_1024 9
+#define G_1536 10
+#define G_2048 11
+#define G_4096 12
+#define G_INF 13
 
 /** @brief 如果ASIZE比这个数大，那么该Block就有多种不同大小的Block */
 #define MAX_SINGLE_BLOCK_GROUP 64
@@ -234,31 +237,34 @@ static const uint8_t cluster_alloc_to_bit_count[] = {
  *       左移4位，再到数组中进行寻址
  *
  * @par 数组中各下标含有如下内容：
- * + 0：asize = 4096，为G_4096
+ * + 0：asize = 4096，为G_4096；
  * + 1：asize = 16，为G_16；
  * + 2：asize = 32，为G_32；
  * + 3：asize = 48，为G_48；
  * + 4：asize = 64，为G_64；
  * + 5 ~ 8：asize = (64, 128]，为G_128；
- * + 9 ~ 16：asize = (128, 256]，为G_256；
- * + 17 ~ 32：asize = (256, 512]，为G_512；
- * + 33 ~ 63：asize = (512, 1024]，为G_1024；
- * + 64 ~ 127：asize = (1024, 2048]，为G_2048；
- * + 128 ~ 255：asize = (2048, 4096)，为G_4096；
+ * + 9 ~ 12：asize = (128, 192]，为G_192；
+ * + 13 ~ 16：asize = (192, 256]，为G_256；
+ * + 17 ~ 24：asize = (256, 384]，为G_384；
+ * + 25 ~ 32：asize = (384, 512]，为G_512；
+ * + 33 ~ 64：asize = (768, 1024]，为G_1024；
+ * + 65 ~ 96：asize = (1024, 1536]，为G_1536；
+ * + 97 ~ 128：asize = (1536, 2048]，为G_2048；
+ * + 129 ~ 255：asize = (2048, 4096)，为G_4096；
  *
  */
 static const uint8_t asize_to_index[] = {
     G_4096, G_16,   G_32,   G_48,   G_64,   G_128,  G_128,  G_128,  G_128,
-    G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_256,  G_512,
-    G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_512,
+    G_192,  G_192,  G_192,  G_192,  G_256,  G_256,  G_256,  G_256,  G_384,
+    G_384,  G_384,  G_384,  G_384,  G_384,  G_384,  G_384,  G_512,  G_512,
     G_512,  G_512,  G_512,  G_512,  G_512,  G_512,  G_1024, G_1024, G_1024,
     G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
     G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
     G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024, G_1024,
-    G_1024, G_1024, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
-    G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
+    G_1024, G_1024, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536,
+    G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536,
+    G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536,
+    G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_1536, G_2048, G_2048,
     G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
     G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
     G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048, G_2048,
@@ -278,8 +284,8 @@ static const uint8_t asize_to_index[] = {
     G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096, G_4096,
     G_4096, G_4096, G_4096, G_4096};
 
-static const uint16_t index_to_asize[] = {128, 32,  48,   64,   128,
-                                          256, 512, 1024, 2048, 4096};
+static const uint16_t index_to_asize[] = {128, 32,  48,   64,   128,  192, 256,
+                                          384, 512, 1024, 1536, 2048, 4096};
 
 typedef struct list_elem {
   /** @brief 指向free list中后一个block的指针 */
@@ -287,9 +293,6 @@ typedef struct list_elem {
   /** @brief 指向free list中前一个block的指针 */
   struct list_elem *prev;
 } list_elem_t;
-
-/** @brief 用于向链表中push block的函数类型 */
-typedef void (*push_func_t)(list_elem_t *, list_elem_t *);
 
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
@@ -361,8 +364,8 @@ typedef struct block {
  *
  */
 
-/** @brief 11个Segregate List */
-#define LIST_TABLE_SIZE 11
+/** @brief 14个Segregate List */
+#define LIST_TABLE_SIZE 14
 
 /**
  * @brief 堆第一个Block的起始位置，类型为block_t *，mem_heap_lo() + prologue
@@ -423,6 +426,8 @@ static bool list_no_empty[LIST_TABLE_SIZE];
 
 /* Declaration start */
 
+/* Heap checking function */
+
 static bool check_free_block_aux(block_t *);
 static bool valid_block_format(block_t *);
 static bool check_word_align_dword(word_t);
@@ -432,16 +437,26 @@ static bool check_addr_is_root(list_elem_t *);
 static bool check_size_list(uint8_t, list_elem_t *);
 static bool check_is_node(block_t *);
 
+/* List pointer operation */
+
 static inline list_elem_t *get_prev(list_elem_t *);
 static inline void set_prev(list_elem_t *, list_elem_t *);
 static inline list_elem_t *get_next(list_elem_t *);
 static inline void set_next(list_elem_t *, list_elem_t *);
+
+/* List operation */
 
 static void push_front(list_elem_t *root, list_elem_t *new_head);
 static void push_order(list_elem_t *root, list_elem_t *block);
 static void push_list(uint8_t table_index, list_elem_t *list_elem);
 static void remove_list_elem(list_elem_t *);
 static list_elem_t *get_list_by_index(uint8_t);
+
+/* Block fit */
+
+static block_t *find_good_fit(size_t, uint8_t);
+static block_t *find_first_fit(size_t, uint8_t);
+static block_t *find_fit(size_t);
 
 static block_t *find_next(block_t *);
 static block_t *find_heap_by_cmp(block_t *, bool cmp(block_t *, block_t *));
@@ -453,14 +468,42 @@ static inline bool cmp_insert_after_list_elem(list_elem_t *block,
 
 /* Declaration end */
 
+/* Functions table start */
+
+/**
+ * @brief 用于向链表中push block的函数类型
+ *
+ */
+typedef void (*push_func_t)(list_elem_t *, list_elem_t *);
+
 /**
  * @brief 用于在INDEX（G_XX）和对应的push函数之间提供映射。
- *        除了32、48、64都需要维护address order
+ *        所有链表直接通过push_front实现，不使用push_order
+ *        使用该方式对提升内存利用率没有任何提升
  *
  */
 static const push_func_t index_to_push_func[] = {
-    push_front, push_front, push_front, push_order, push_order, push_order,
-    push_order, push_order, push_order, push_order, push_order};
+    push_front, push_front, push_front, push_front, push_front,
+    push_front, push_front, push_front, push_front, push_front,
+    push_front, push_front, push_front, push_front};
+
+/**
+ * @brief 用于在链表中寻找合适Block的函数类型
+ *
+ */
+typedef block_t *(*fit_func_t)(size_t, uint8_t);
+
+/**
+ * @brief 根据List的不同，使用此数组选择不同的Fit函数
+ *
+ */
+static const fit_func_t index_to_fit_func[] = {
+    find_first_fit, find_first_fit, find_first_fit, find_first_fit,
+    find_good_fit,  find_good_fit,  find_good_fit,  find_good_fit,
+    find_good_fit,  find_good_fit,  find_good_fit,  find_good_fit,
+    find_good_fit,  find_first_fit};
+
+/* Functions table end */
 
 /**
  * @brief Returns the maximum of two integers.
@@ -528,6 +571,18 @@ static inline word_t pack_cluster(bool alloc, bool front_alloc) {
   return pack_regular((size_t)word, alloc, front_alloc);
 }
 
+/**
+ * @brief 将NUM打包到一个Word里，作为Cluster Block的Header
+ *
+ * @param num
+ * @return word_t
+ */
+static inline word_t pack_cluster_block_header(uint8_t num) {
+  word_t header = num;
+  header <<= 32;
+  header |= cluster_mask;
+  return header;
+}
 /**
  * @brief Extracts the size represented in a packed word.
  *
@@ -922,10 +977,9 @@ static void create_cluster(block_t *block) {
 
   uint8_t num = 0;
   // 设置每一个cluster block的第2个半字为对应编号
-  for (uint8_t *p = get_cluster_block(block, 0); num != CLUSTER_BLOCK_COUNT;
-       p += cluster_block_size) {
-    p[4] = num;
-    *p |= (uint8_t)cluster_mask;
+  for (word_t *p = get_cluster_block(block, 0); num != CLUSTER_BLOCK_COUNT;
+       p += 2) {
+    *p = pack_cluster_block_header(num);
     num++;
   }
 
@@ -1139,8 +1193,6 @@ static inline list_elem_t *get_prev(list_elem_t *this) {
 
 /**
  * @brief Set the prev pointer of THIS to LIST_ELEM
- *
- *  todo  可能需要进一步的保护措施
  *
  * @param this
  * @param block
@@ -1795,26 +1847,30 @@ static bool check_node_ordered_with_next(list_elem_t *list_elem) {
  */
 static bool check_size_list(uint8_t index, list_elem_t *list_elem) {
   dbg_ensures(index < LIST_TABLE_SIZE);
+  block_t *block = payload_to_header(list_elem);
 
   switch (index) {
   case G_16:
-    return get_size(payload_to_header(list_elem)) == index_to_asize[index];
+    return get_size(block) == index_to_asize[index];
     break;
   case G_32:
   case G_48:
   case G_64:
-    return get_size(payload_to_header(list_elem)) == index_to_asize[index];
+    return get_size(block) == index_to_asize[index];
     break;
   case G_128:
+  case G_192:
   case G_256:
+  case G_384:
   case G_512:
   case G_1024:
   case G_2048:
+  case G_1536:
   case G_4096:
-    return get_size(payload_to_header(list_elem)) <= index_to_asize[index] &&
-           get_size(payload_to_header(list_elem)) > index_to_asize[index - 1];
+    return get_size(block) <= index_to_asize[index] &&
+           get_size(block) > index_to_asize[index - 1];
   case G_INF:
-    return get_size(payload_to_header(list_elem)) > index_to_asize[index - 1];
+    return get_size(block) > index_to_asize[index - 1];
   default:
     return false;
   }
@@ -2100,14 +2156,14 @@ static void split_block(block_t *block, size_t asize) {
  * 这一算法可有效减少内存的Internal Fragmentation现象
  *
  * @param[in] asize 目标大小
+ * @param[in] index list_table下标
  * @return 块的地址，如果没有找到则是NULL
  */
-static block_t *find_fit(size_t asize) {
+static block_t *find_good_fit(size_t asize, uint8_t index) {
   dbg_assert(asize >= 32);
 
   list_elem_t *list_elem;
   block_t *block = NULL;
-  uint8_t index = deduce_list_index(asize);
   size_t ssize = asize + min_block_size;
   // 保存满足条件( >= ssize )的Block
   block_t *sblock = NULL;
@@ -2161,6 +2217,79 @@ section2:
     } while (list_elem != END_OF_LIST);
   }
   return NULL; // no fit found
+}
+
+/**
+ * @brief 找到第一个大于或等于ASIZE的Block，没有找到就切换到下一个链表
+ *
+ * TODO 这里也需要加上一段，中间用来检查ASIZE是不是32或者48，如果是的话++index
+ *
+ * @param asize 目标大小
+ * @param index list_table下标
+ * @return block_t*
+ */
+static block_t *find_first_fit(size_t asize, uint8_t index) {
+  list_elem_t *list_elem;
+  block_t *block = NULL;
+  // 如果链表是空的直接跳过
+  if (list_no_empty[index] == false) {
+    goto section2;
+  }
+
+  // 由于再清理链表元素的时候不会更新对应链表空状态，因此这里需要检查一下
+  list_elem = get_next(get_list_by_index(index));
+  if (list_elem == END_OF_LIST) {
+    // 如果没有更新空状态，那么需要显式更新一下
+    list_no_empty[index] = true;
+    goto section2;
+  }
+
+  do {
+    block = payload_to_header(list_elem);
+    if (asize <= get_size(block)) {
+      return block;
+    }
+    list_elem = get_next(list_elem);
+  } while (list_elem != END_OF_LIST);
+  if (asize == 32 || asize == 48) {
+    index++;
+  }
+section2:
+  for (int i = index; i < LIST_TABLE_SIZE; i++) {
+    // 如果链表是空的直接跳过
+    if (list_no_empty[i] == false) {
+      continue;
+    }
+
+    // 由于再清理链表元素的时候不会更新对应链表空状态，因此这里需要检查一下
+    list_elem = get_next(get_list_by_index(i));
+    if (list_elem == END_OF_LIST) {
+      // 如果没有更新空状态，那么需要显式更新一下
+      list_no_empty[i] = true;
+      continue;
+    }
+
+    do {
+      block = payload_to_header(list_elem);
+      if (asize <= get_size(block)) {
+        return block;
+      }
+      list_elem = get_next(list_elem);
+    } while (list_elem != END_OF_LIST);
+  }
+  return NULL; // no fit found
+}
+
+/**
+ * @brief 根据ASIZE选择调用合适的fit函数
+ *
+ * @param asize
+ * @return block_t*
+ */
+static inline block_t *find_fit(size_t asize) {
+  uint8_t index = deduce_list_index(asize);
+  block_t *result = index_to_fit_func[index](asize, index);
+  return result;
 }
 
 /**
@@ -2446,10 +2575,11 @@ void *malloc(size_t size) {
   } else {
     // Adjust block size to include overhead and to meet alignment requirements
     asize = round_up(size + overhead_size, dsize);
-    // 至少为min_block_size
-    asize = max(min_block_size, asize);
+    // 由于使用Round
+    // up可以确保至少为min_block_size，因此无需执行max(min_block_size, asize)
   }
   // 需要放外边 Search the free list for a fit
+  // block = find_good_fit(asize, deduce_list_index(asize));
   block = find_fit(asize);
 
   // If no fit is found, request more memory, and then and place the block
