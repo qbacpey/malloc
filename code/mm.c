@@ -799,7 +799,7 @@ static bool get_cluster(block_t *block) {
 }
 
 /**
- * @brief 获取BLOCK的alloc字段（即Cluster的第四个word）
+ * @brief 获取BLOCK的alloc字段（即第一个Cluster的最后一个Word）
  *
  * TODO 改成2
  *
@@ -807,7 +807,7 @@ static bool get_cluster(block_t *block) {
  * @return word_t
  */
 static word_t *cluster_alloc_field(block_t *block) {
-  return (word_t *)block + 3;
+  return (word_t *)block + 15;
 }
 
 /**
@@ -998,7 +998,7 @@ static inline void *get_cluster_block(block_t *block, uint8_t num) {
   dbg_assert(get_cluster(block) == true);
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
   // TODO 优化
-  return (void *)block + min_block_size + num * dsize;
+  return (void *)block + dsize + num * dsize;
 }
 
 /**
@@ -1030,7 +1030,7 @@ static void create_cluster(block_t *block) {
   // 设置Cluster Bit
   set_cluster((word_t *)block);
 
-  // TODO 更改 Allocated field位置 清空Allocated field
+  // 清空Allocated field
   *cluster_alloc_field(block) = 0;
 
   uint8_t num = 0;
@@ -1055,7 +1055,7 @@ static inline block_t *get_cluster_by_cluster_block(void *cluster_block,
                                                     uint8_t num) {
   dbg_assert(check_word_align_word((word_t)cluster_block));
   dbg_assert(num < CLUSTER_BLOCK_COUNT);
-  return (block_t *)(cluster_block - num * cluster_block_size - min_block_size);
+  return (block_t *)(cluster_block - num * cluster_block_size - dsize);
 }
 
 /**
@@ -1893,8 +1893,10 @@ static bool check_match_with_back(list_elem_t *list_elem) {
  * @return false
  */
 static bool check_node_prev(list_elem_t *list_elem) {
-  return (check_address_in_heap((word_t)get_prev(list_elem)) ||
-          check_addr_is_root(get_prev(list_elem)));
+  block_t *block = payload_to_header(list_elem);
+
+  return check_address_in_heap((word_t)get_prev(list_elem)) ||
+         check_addr_is_root(get_prev(list_elem)) || get_cluster(block);
 }
 
 /**
@@ -2544,8 +2546,14 @@ bool mm_checkheap(int line) {
       goto done;
     }
 
-    if (!get_alloc(curr) || (get_cluster(curr) && !deduce_cluster_full(curr))) {
-      count++;
+    if (get_cluster(curr)) {
+      if (!deduce_cluster_full(curr)) {
+        count++;
+      }
+    } else {
+      if (!get_alloc(curr)) {
+        count++;
+      }
     }
   }
 
