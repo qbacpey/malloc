@@ -132,7 +132,7 @@ static const size_t cluster_block_size = dsize;
  * @brief 一个cluster block的大小
  *
  */
-static const size_t cluster_block_payload_size = wsize;
+// static const size_t cluster_block_payload_size = wsize;
 
 /**
  * @brief Flag field bit的数目
@@ -2658,7 +2658,7 @@ void *malloc(size_t size) {
   }
 
   // 用于表示要不要执行和Cluster Block分配相关的逻辑
-  bool alloc_cluster = size <= cluster_block_payload_size;
+  bool alloc_cluster = size < dsize;
   // Cluster Block & Regular Block
   if (alloc_cluster) {
     // 查看系统中有没有现成的Cluster
